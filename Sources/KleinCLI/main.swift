@@ -1,6 +1,7 @@
 // klein-cli — GPU render lane for the Klein port.
 //   swift run -c release klein-cli --size 1024 --steps 4 --seed 42 [--snapshot <dir>] [--prompt ...]
 
+import CoreGraphics
 import Foundation
 import Flux2VAE
 import ImageIO
@@ -21,6 +22,29 @@ struct KleinCLI {
         }
         func flag(_ n: String) -> Bool {
             if let i = args.firstIndex(of: n) { args.remove(at: i); return true }; return false
+        }
+        // --pkg-edit <ref.png>: drive the real package's imageEdit surface (IEditRequest).
+        if let editPath = opt("--pkg-edit") {
+            let snap = opt("--snapshot") ?? URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("weights/FLUX.2-klein-4B").path
+            let pkg = Klein4BT2IPackage(configuration: .init(quant: .bf16, snapshotPath: snap))
+            let surfaces = Klein4BT2IPackage.manifest.surfaces.map(\.name).joined(separator: ", ")
+            print("[pkg-edit] surfaces=[\(surfaces)]")
+            try await pkg.load()
+            let refData = try Data(contentsOf: URL(fileURLWithPath: editPath))
+            let t1 = Date()
+            let resp = try await pkg.run(IEditRequest(
+                images: [Image(format: .png, data: refData, width: 1024, height: 1024)],
+                prompt: opt("--prompt") ?? "the fox sitting on a sunny tropical beach, photorealistic",
+                width: 1024, height: 1024, seed: 5)) as! IEditResponse
+            print("[pkg-edit] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s → "
+                  + "\(resp.image.data.count) bytes .\(resp.image.format)")
+            try resp.image.data.write(to: URL(fileURLWithPath: opt("--out") ?? "klein_pkg_edit.png"))
+            await pkg.unload()
+            print("[pkg-edit] peak \(MLX.Memory.peakMemory / (1 << 20))MB; done")
+            return
         }
         // --pkg-e2e: drive the real Klein4BT2IPackage (load→run→decode).
         if flag("--pkg-e2e") {
@@ -62,6 +86,8 @@ struct KleinCLI {
             print("[cli] \(label): \(String(format: "%.2f", Date().timeIntervalSince(t0)))s"); return r
         }
 
+        // --edit <ref.png>: compositional multi-reference edit (comma-separate for multiple refs).
+        let editRefs = opt("--edit")
         let quantBits = Int(opt("--quant") ?? "0")!
         let transformer = try timed("load DiT") { try KleinWeights.loadTransformer(snapshotPath: snapshot, dtype: .bfloat16) }
         if quantBits == 8 || quantBits == 4 {
@@ -78,12 +104,44 @@ struct KleinCLI {
         eval(embeds)
         print("[cli] prompt embeds: \(embeds.shape)")
 
+        func loadRefImage(_ path: String, _ dim: Int) -> MLXArray {
+            let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+            let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)!
+            let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)!
+            var buf = [UInt8](repeating: 0, count: dim * dim * 4)
+            let ctx = CGContext(data: &buf, width: dim, height: dim, bitsPerComponent: 8,
+                bytesPerRow: dim * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dim, height: dim))   // scales to dim×dim
+            var rgb = [Float](repeating: 0, count: 3 * dim * dim)
+            for p in 0..<(dim * dim) {
+                rgb[p] = Float(buf[p*4]) / 127.5 - 1               // R plane
+                rgb[dim*dim + p] = Float(buf[p*4+1]) / 127.5 - 1   // G plane
+                rgb[2*dim*dim + p] = Float(buf[p*4+2]) / 127.5 - 1 // B plane
+            }
+            return MLXArray(rgb, [1, 3, dim, dim])
+        }
+
         let t0 = Date()
-        let result = KleinPipeline.generate(
-            transformer: transformer, vae: vae, promptEmbeds: embeds,
-            height: size, width: size, numInferenceSteps: steps, guidanceScale: 1.0,
-            seed: seed, transformerDtype: .bfloat16,
-            onStep: { i, n in print("[cli] step \(i)/\(n)") })
+        let result: KleinPipeline.Result
+        if let editRefs {
+            let vaeEnc = try timed("load VAE encoder") { try KleinWeights.loadVAEEncoder(snapshotPath: snapshot, dtype: .float32) }
+            let vaeArrays = try MLX.loadArrays(url: URL(fileURLWithPath: snapshot).appendingPathComponent("vae/diffusion_pytorch_model.safetensors"))
+            let bnMean = vaeArrays["bn.running_mean"]!.asType(.float32).reshaped(1, -1, 1, 1)
+            let bnStd = MLX.sqrt(vaeArrays["bn.running_var"]!.asType(.float32).reshaped(1, -1, 1, 1) + 1e-4)
+            let refs = editRefs.split(separator: ",").map { loadRefImage(String($0), size) }
+            print("[cli] EDIT with \(refs.count) reference(s)")
+            result = KleinEditPipeline.generate(
+                transformer: transformer, vae: vae, vaeEncoder: vaeEnc, bnMean: bnMean, bnStd: bnStd,
+                promptEmbeds: embeds, referenceImages: refs, height: size, width: size,
+                numInferenceSteps: steps, seed: seed, transformerDtype: .bfloat16,
+                onStep: { i, n in print("[cli] step \(i)/\(n)") })
+        } else {
+            result = KleinPipeline.generate(
+                transformer: transformer, vae: vae, promptEmbeds: embeds,
+                height: size, width: size, numInferenceSteps: steps, guidanceScale: 1.0,
+                seed: seed, transformerDtype: .bfloat16,
+                onStep: { i, n in print("[cli] step \(i)/\(n)") })
+        }
         print("[cli] generate: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s | peak \(MLX.Memory.peakMemory / (1 << 20)) MB")
 
         // [-1,1] NCHW → PNG

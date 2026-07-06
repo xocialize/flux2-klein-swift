@@ -62,6 +62,23 @@ public enum KleinWeights {
         return model
     }
 
+    /// Load the FLUX.2 VAE ENCODER (encoder.* + quant_conv.*) from `<snapshot>/vae/` — the keys
+    /// flux2-vae-mlx-swift (decoder-only) skips. fp32. Conv2d weights transpose (O,I,kH,kW)→(O,kH,kW,I).
+    public static func loadVAEEncoder(snapshotPath: String, dtype: DType = .float32) throws -> KleinVAEEncoder {
+        let dir = URL(fileURLWithPath: snapshotPath).appendingPathComponent("vae")
+        var weights: [String: MLXArray] = [:]
+        for (key, rawValue) in try loadShards(directory: dir) {
+            guard key.hasPrefix("encoder.") || key.hasPrefix("quant_conv.") else { continue }
+            var value = rawValue
+            if key.hasSuffix(".weight"), value.ndim == 4 { value = value.transposed(0, 2, 3, 1) }
+            weights[key] = value.asType(dtype)
+        }
+        let enc = KleinVAEEncoder()
+        try enc.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
+        eval(enc)
+        return enc
+    }
+
     /// Load the Qwen3-4B encoder from `<snapshot>/text_encoder/`, keeping only the layers up to
     /// the deepest tap (klein: 0..26). Drops deeper layers, final norm, and the (tied) lm_head.
     public static func loadTextEncoder(

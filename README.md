@@ -35,9 +35,17 @@ let package = Klein4BT2IPackage(configuration: .init(
     quant: .int4,                       // ~11 GB pipeline (16 GB Mac); .bf16 ≈ 16 GB
     snapshotPath: "<root>/FLUX.2-klein-4B"))   // or nil → auto-materialize from mlx-community
 try await package.load()
-let response = try await package.run(T2IRequest(
+
+// text-to-image
+let t2i = try await package.run(T2IRequest(
     prompt: "a red fox in a snowy forest at sunrise, photorealistic",
-    width: 1024, height: 1024, seed: 42)) as! T2IResponse   // response.image: canonical .png
+    width: 1024, height: 1024, seed: 42)) as! T2IResponse   // t2i.image: canonical .png
+
+// multi-reference edit (v0.2.0)
+let edit = try await package.run(IEditRequest(
+    images: [foxImage],                                     // conditioning images, in prompt order
+    prompt: "the fox sitting on a sunny tropical beach",
+    width: 1024, height: 1024, seed: 5)) as! IEditResponse
 await package.unload()
 ```
 
@@ -58,8 +66,12 @@ int8/int4 are produced at load from the bf16 snapshot. Upstream:
   DiT the **full 512-token** padded sequence (causal+padding mask), via the Qwen chat template
   (`add_generation_prompt=True, enable_thinking=False`).
 - VAE = FLUX.2 (32 latent channels), reused verbatim from `flux2-vae-mlx-swift`.
-- **Multi-reference editing** (klein's differentiator — token-concat + 4D-RoPE offsets + KV-cache)
-  ships as a follow-on (v0.2.0).
+- **Multi-reference editing** (klein's differentiator, **v0.2.0**): compose a new image from one or
+  more reference images via reference-token conditioning — the reference subject is VAE-encoded,
+  patchified, bn-normalized, packed, and appended to the target sequence with a 4D-RoPE t-offset
+  (`t = 10·(i+1)` per reference). Surface `flux2-klein-4b-edit` (`IEditRequest`, images in prompt
+  order). E.g. reference = a fox photo, prompt = "the fox on a tropical beach" → same fox, new
+  scene. (Plain path; the KV-cache speed path is a later optimization.)
 
 ## Gates
 

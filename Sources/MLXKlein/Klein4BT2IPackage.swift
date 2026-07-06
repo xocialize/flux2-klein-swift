@@ -57,8 +57,15 @@ public final class Klein4BT2IPackage: ModelPackage {
                     name: "flux2-klein-4b-t2i",
                     summary: "FLUX.2-klein-4B text-to-image (Apache-2.0): compact 4B rectified-flow "
                         + "MMDiT distilled to 4 steps (guidance 1.0, no negative prompt), Qwen3-4B "
-                        + "3-layer conditioning + FLUX.2 VAE; ~6 s @1024² int4 on a 16 GB Mac. "
-                        + "Multi-reference editing (its differentiator) ships as a follow-on.",
+                        + "3-layer conditioning + FLUX.2 VAE; ~6 s @1024² int4 on a 16 GB Mac.",
+                    modes: []
+                ),
+                IEditContract.descriptor(
+                    name: "flux2-klein-4b-edit",
+                    summary: "FLUX.2-klein-4B multi-reference EDITING (its differentiator): compose a "
+                        + "new image from one or more reference images (subject/style/scene) via "
+                        + "reference-token conditioning — 'the subject from image 1, on a beach'. "
+                        + "Pass conditioning images in prompt order.",
                     modes: []
                 )
             ]
@@ -86,7 +93,14 @@ public final class Klein4BT2IPackage: ModelPackage {
         let encoder = try KleinWeights.loadTextEncoder(snapshotPath: snapshot.path, dtype: .bfloat16)
         let tokenizer = try await AutoTokenizer.from(modelFolder: snapshot.appendingPathComponent("tokenizer"))
         let textEncoder = KleinTextEncoder(encoder: encoder, tokenizer: tokenizer)
-        generator = KleinGenerator(transformer: transformer, vae: vae, textEncoder: textEncoder, transformerDtype: .bfloat16)
+        // Edit path: VAE encoder + bn stats (small; enables the imageEdit surface).
+        let vaeEncoder = try KleinWeights.loadVAEEncoder(snapshotPath: snapshot.path, dtype: .float32)
+        let vaeArrays = try MLX.loadArrays(url: snapshot.appendingPathComponent("vae/diffusion_pytorch_model.safetensors"))
+        let bnMean = vaeArrays["bn.running_mean"]!.asType(.float32).reshaped(1, -1, 1, 1)
+        let bnStd = MLX.sqrt(vaeArrays["bn.running_var"]!.asType(.float32).reshaped(1, -1, 1, 1) + 1e-4)
+        eval(bnMean, bnStd)
+        generator = KleinGenerator(transformer: transformer, vae: vae, textEncoder: textEncoder,
+            transformerDtype: .bfloat16, vaeEncoder: vaeEncoder, bnMean: bnMean, bnStd: bnStd)
     }
 
     public func unload() async {
@@ -96,23 +110,56 @@ public final class Klein4BT2IPackage: ModelPackage {
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
         guard let generator else { throw PackageError.notLoaded }
-        guard request.capability == .textToImage, let t2i = request as? T2IRequest else {
-            throw PackageError.unsupportedCapability(request.capability)
-        }
         try Task.checkCancellation()
-        let width = ((t2i.width ?? 1024) / 16) * 16
-        let height = ((t2i.height ?? 1024) / 16) * 16
-        let steps = t2i.steps ?? configuration.defaultSteps
-
         let prof = MLXProfiler.shared
-        prof.beginRun("flux2-klein textToImage steps=\(steps) \(width)x\(height)")
-        let (pixels, w, h) = generator.generate(
-            prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0)
-        prof.endRun(denominators: ["step": Double(steps)])
 
-        try Task.checkCancellation()
-        let png = try Self.encodePNG(pixels: pixels, width: w, height: h)
-        return T2IResponse(image: Image(format: .png, data: png, width: w, height: h))
+        if let t2i = request as? T2IRequest {
+            let width = ((t2i.width ?? 1024) / 16) * 16
+            let height = ((t2i.height ?? 1024) / 16) * 16
+            let steps = t2i.steps ?? configuration.defaultSteps
+            prof.beginRun("flux2-klein textToImage steps=\(steps) \(width)x\(height)")
+            let (pixels, w, h) = generator.generate(
+                prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0)
+            prof.endRun(denominators: ["step": Double(steps)])
+            try Task.checkCancellation()
+            return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
+        }
+
+        if let edit = request as? IEditRequest {
+            let width = ((edit.width ?? 1024) / 16) * 16
+            let height = ((edit.height ?? 1024) / 16) * 16
+            let steps = edit.steps ?? configuration.defaultSteps
+            // Decode each conditioning image → [1,3,height,width] in [-1,1] (scaled to target).
+            let refs = try edit.images.map { try Self.decodeReference($0, dim: width) }
+            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) \(width)x\(height)")
+            let (pixels, w, h) = generator.generateEdit(
+                prompt: edit.prompt, referenceImages: refs, width: width, height: height,
+                steps: steps, seed: edit.seed ?? 0)
+            prof.endRun(denominators: ["step": Double(steps)])
+            try Task.checkCancellation()
+            return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
+        }
+
+        throw PackageError.unsupportedCapability(request.capability)
+    }
+
+    /// Decode a conditioning `Image` (PNG/etc.) → [1,3,dim,dim] in [-1,1], scaled to dim×dim.
+    nonisolated static func decodeReference(_ image: Image, dim: Int) throws -> MLXArray {
+        guard let src = CGImageSourceCreateWithData(image.data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)
+        else { throw KleinPackageError.pngEncode }
+        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+        var buf = [UInt8](repeating: 0, count: dim * dim * 4)
+        let ctx = CGContext(data: &buf, width: dim, height: dim, bitsPerComponent: 8,
+            bytesPerRow: dim * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dim, height: dim))
+        var rgb = [Float](repeating: 0, count: 3 * dim * dim)
+        for p in 0..<(dim * dim) {
+            rgb[p] = Float(buf[p*4]) / 127.5 - 1
+            rgb[dim*dim + p] = Float(buf[p*4+1]) / 127.5 - 1
+            rgb[2*dim*dim + p] = Float(buf[p*4+2]) / 127.5 - 1
+        }
+        return MLXArray(rgb, [1, 3, dim, dim])
     }
 
     nonisolated static func encodePNG(pixels: [UInt8], width: Int, height: Int) throws -> Data {

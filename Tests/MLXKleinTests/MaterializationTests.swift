@@ -45,9 +45,11 @@ final class MaterializationTests: XCTestCase {
         XCTAssertEqual(cfg.resolvedSnapshotDirectory(storeRoot: root)?.path, dir.path)
     }
 
-    func testManifestApache() {
+    func testManifestApacheAndSurfaces() {
         XCTAssertEqual(Klein4BT2IPackage.manifest.license.weightLicense, .apache2)
-        XCTAssertEqual(Klein4BT2IPackage.manifest.surfaces[0].name, "flux2-klein-4b-t2i")
+        let names = Klein4BT2IPackage.manifest.surfaces.map(\.name)
+        XCTAssertTrue(names.contains("flux2-klein-4b-t2i"))
+        XCTAssertTrue(names.contains("flux2-klein-4b-edit"))   // multi-ref edit surface
     }
 
     func testCodableRoundTrip() throws {
