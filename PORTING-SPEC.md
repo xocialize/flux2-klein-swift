@@ -142,5 +142,7 @@ variant (undistilled): ~50-step, guidance >1. Port the mflux pipeline verbatim (
       Apache/MIT, split QuantFootprint ×3, unload→clearCache, engine pin 0.21.0. Builds clean;
       5/5 MAT+conformance; wrapper e2e (`--pkg-e2e --quant 4`): real load 0.76s/run 6.04s/valid
       1024² PNG/19.2 GB peak/clean unload. klein-4B is all-bf16 → no conversion for publish.
-- [ ] **PUBLISH** (P8 remaining): code → xocialize/flux2-klein-swift@0.1.0; weights →
-      mlx-community/FLUX.2-klein-4B-bf16 (snapshot as-is); registry row. Then P6 multi-ref edit (v0.2).
+- [x] **PUBLISHED v0.1.0**: xocialize/flux2-klein-swift@v0.1.0 · mlx-community/FLUX.2-klein-4B-bf16
+      (24 files, 22.1 GB) + Collection · registry row merged. T2I tier COMPLETE.
+- [ ] **P6 multi-ref EDIT (v0.2 — differentiator)**: Flux2KVCache + reference token-concat +
+      4D-RoPE t-offsets (mflux variants/edit/flux2_klein_edit.py). 4B only.
