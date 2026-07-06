@@ -1,0 +1,6 @@
+.build/
+.DS_Store
+*.png
+tests/goldens/*.safetensors
+Tests/goldens/*.safetensors
+Tests/goldens/*.json
