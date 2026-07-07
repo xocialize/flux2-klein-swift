@@ -74,6 +74,9 @@ public final class Klein4BT2IPackage: ModelPackage {
 
     let configuration: Configuration
     private var generator: KleinGenerator?
+    /// Encoder-evict mode only: loads the Qwen3-4B conditioner on demand (nil when the encoder is
+    /// held resident inside the generator).
+    private var encoderProvider: (() async throws -> KleinTextEncoder)?
 
     public nonisolated init(configuration: Configuration) { self.configuration = configuration }
 
@@ -90,22 +93,53 @@ public final class Klein4BT2IPackage: ModelPackage {
         default: break
         }
         let vae = try Flux2VAEWeights.loadVAE(directory: snapshot.appendingPathComponent("vae"), dtype: .float32)
-        let encoder = try KleinWeights.loadTextEncoder(snapshotPath: snapshot.path, dtype: .bfloat16)
-        let tokenizer = try await AutoTokenizer.from(modelFolder: snapshot.appendingPathComponent("tokenizer"))
-        let textEncoder = KleinTextEncoder(encoder: encoder, tokenizer: tokenizer)
         // Edit path: VAE encoder + bn stats (small; enables the imageEdit surface).
         let vaeEncoder = try KleinWeights.loadVAEEncoder(snapshotPath: snapshot.path, dtype: .float32)
         let vaeArrays = try MLX.loadArrays(url: snapshot.appendingPathComponent("vae/diffusion_pytorch_model.safetensors"))
         let bnMean = vaeArrays["bn.running_mean"]!.asType(.float32).reshaped(1, -1, 1, 1)
         let bnStd = MLX.sqrt(vaeArrays["bn.running_var"]!.asType(.float32).reshaped(1, -1, 1, 1) + 1e-4)
         eval(bnMean, bnStd)
+
+        let snapPath = snapshot.path
+        var textEncoder: KleinTextEncoder? = nil
+        if configuration.evictEncoder {
+            // Light tier: capture a per-request loader; keep the ~8 GB encoder out of the resident set.
+            encoderProvider = {
+                let enc = try KleinWeights.loadTextEncoder(snapshotPath: snapPath, dtype: .bfloat16)
+                let tok = try await AutoTokenizer.from(
+                    modelFolder: URL(fileURLWithPath: snapPath).appendingPathComponent("tokenizer"))
+                return KleinTextEncoder(encoder: enc, tokenizer: tok)
+            }
+        } else {
+            let enc = try KleinWeights.loadTextEncoder(snapshotPath: snapPath, dtype: .bfloat16)
+            let tok = try await AutoTokenizer.from(
+                modelFolder: URL(fileURLWithPath: snapPath).appendingPathComponent("tokenizer"))
+            textEncoder = KleinTextEncoder(encoder: enc, tokenizer: tok)
+        }
         generator = KleinGenerator(transformer: transformer, vae: vae, textEncoder: textEncoder,
             transformerDtype: .bfloat16, vaeEncoder: vaeEncoder, bnMean: bnMean, bnStd: bnStd)
     }
 
     public func unload() async {
         generator = nil
+        encoderProvider = nil
         MLX.Memory.clearCache()
+    }
+
+    /// Encoder-evict: load the conditioner, encode prompt (+ negative for CFG), force-materialize the
+    /// embeds off the encoder graph (`eval`), then drop the encoder + clear the pool BEFORE returning —
+    /// so the ~8 GB encoder is reclaimed ahead of the DiT denoise peak. Parity-identical to the
+    /// resident path (only WHEN the encoder frees changes).
+    private func encodeAndEvict(prompt: String, negativePrompt: String?, guidance: Float) async throws
+        -> (pos: MLXArray, neg: MLXArray?) {
+        guard let encoderProvider else { throw PackageError.notLoaded }
+        var enc: KleinTextEncoder? = try await encoderProvider()
+        let pos = enc!.encode(prompt)
+        let neg = guidance > 1.0 ? enc!.encode(negativePrompt ?? "") : nil
+        eval([pos] + (neg.map { [$0] } ?? []))   // materialize off the encoder graph
+        enc = nil                                 // release the conditioner (last strong ref)
+        MLX.Memory.clearCache()                   // reclaim the ~8 GB before the denoise peak
+        return (pos, neg)
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
@@ -120,10 +154,19 @@ public final class Klein4BT2IPackage: ModelPackage {
             // Base tier: request guidance overrides the config default (>1 ⇒ two-pass CFG + negative
             // prompt). Distilled config default is 1.0 ⇒ single forward, negative ignored.
             let guidance = Float(t2i.guidanceScale ?? Double(configuration.guidanceScale))
-            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) \(width)x\(height)")
-            let (pixels, w, h) = generator.generate(
-                prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
-                negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
+            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
+            let pixels: [UInt8], w: Int, h: Int
+            if configuration.evictEncoder {
+                let (pos, neg) = try await encodeAndEvict(
+                    prompt: t2i.prompt, negativePrompt: t2i.negativePrompt, guidance: guidance)
+                (pixels, w, h) = generator.generate(
+                    promptEmbeds: pos, negativeEmbeds: neg, width: width, height: height,
+                    steps: steps, seed: t2i.seed ?? 0, guidanceScale: guidance)
+            } else {
+                (pixels, w, h) = generator.generate(
+                    prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
+                    negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
+            }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
             return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
@@ -136,11 +179,20 @@ public final class Klein4BT2IPackage: ModelPackage {
             // Decode each conditioning image → [1,3,height,width] in [-1,1] (scaled to target).
             let refs = try edit.images.map { try Self.decodeReference($0, dim: width) }
             let guidance = Float(edit.guidanceScale ?? Double(configuration.guidanceScale))
-            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) g=\(guidance) \(width)x\(height)")
-            let (pixels, w, h) = generator.generateEdit(
-                prompt: edit.prompt, referenceImages: refs, width: width, height: height,
-                steps: steps, seed: edit.seed ?? 0,
-                negativePrompt: edit.negativePrompt, guidanceScale: guidance)
+            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
+            let pixels: [UInt8], w: Int, h: Int
+            if configuration.evictEncoder {
+                let (pos, neg) = try await encodeAndEvict(
+                    prompt: edit.prompt, negativePrompt: edit.negativePrompt, guidance: guidance)
+                (pixels, w, h) = generator.generateEdit(
+                    promptEmbeds: pos, negativeEmbeds: neg, referenceImages: refs, width: width,
+                    height: height, steps: steps, seed: edit.seed ?? 0, guidanceScale: guidance)
+            } else {
+                (pixels, w, h) = generator.generateEdit(
+                    prompt: edit.prompt, referenceImages: refs, width: width, height: height,
+                    steps: steps, seed: edit.seed ?? 0,
+                    negativePrompt: edit.negativePrompt, guidanceScale: guidance)
+            }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
             return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))

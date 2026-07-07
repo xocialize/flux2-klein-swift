@@ -53,19 +53,22 @@ struct KleinCLI {
                 .deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("weights/FLUX.2-klein-4B").path
             let q: Quant = opt("--quant").flatMap { Int($0) } == 4 ? .int4 : .bf16
-            let pkg = Klein4BT2IPackage(configuration: .init(quant: q, snapshotPath: snap))
-            print("[pkg-e2e] surface=\(Klein4BT2IPackage.manifest.surfaces[0].name) quant=\(q)")
+            let evict = flag("--evict")
+            let pkg = Klein4BT2IPackage(configuration: .init(quant: q, snapshotPath: snap, evictEncoder: evict))
+            print("[pkg-e2e] surface=\(Klein4BT2IPackage.manifest.surfaces[0].name) quant=\(q) evict=\(evict)")
             let t0 = Date(); try await pkg.load()
-            print("[pkg-e2e] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s")
+            let residentMB = MLX.Memory.activeMemory / (1 << 20)
+            print("[pkg-e2e] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s | resident floor \(residentMB)MB")
             let t1 = Date()
+            let sz = Int(opt("--size") ?? "1024")!
             let resp = try await pkg.run(T2IRequest(
                 prompt: opt("--prompt") ?? "a red fox sitting in a snowy forest at sunrise, photorealistic",
-                width: 1024, height: 1024, seed: 42)) as! T2IResponse
+                width: sz, height: sz, seed: 42)) as! T2IResponse
             print("[pkg-e2e] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s → "
                   + "\(resp.image.width)x\(resp.image.height) \(resp.image.data.count) bytes .\(resp.image.format)")
             try resp.image.data.write(to: URL(fileURLWithPath: opt("--out") ?? "klein_pkg_e2e.png"))
+            print("[pkg-e2e] PEAK \(MLX.Memory.peakMemory / (1 << 20))MB | resident-floor \(residentMB)MB | quant=\(q) evict=\(evict)")
             await pkg.unload()
-            print("[pkg-e2e] peak \(MLX.Memory.peakMemory / (1 << 20))MB; done")
             return
         }
         let snapshot = opt("--snapshot")

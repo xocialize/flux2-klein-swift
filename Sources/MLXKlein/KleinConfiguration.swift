@@ -16,6 +16,11 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     /// Default CFG scale. Distilled tier = 1.0 (guidance ignored, single forward). Base tier > 1
     /// enables two-pass classifier-free guidance + negative prompt (see KleinPipeline).
     public var guidanceScale: Float
+    /// Encoder-evict (light tier): load the Qwen3-4B conditioner per-request, encode, then evict it
+    /// (+ clearCache) BEFORE the DiT denoise — moves the ~8 GB encoder from resident → transient so
+    /// the low-RAM peak ≈ max(encode, denoise) instead of encoder + denoise. Costs an encoder reload
+    /// per request. Default off (keep it resident: faster, for 32 GB+).
+    public var evictEncoder: Bool
     public var modelsRootDirectory: URL?
 
     public init(
@@ -25,6 +30,7 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         snapshotPath: String? = nil,
         defaultSteps: Int = 4,
         guidanceScale: Float = 1.0,
+        evictEncoder: Bool = false,
         modelsRootDirectory: URL? = nil
     ) {
         self.repo = repo
@@ -33,22 +39,29 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         self.snapshotPath = snapshotPath
         self.defaultSteps = defaultSteps
         self.guidanceScale = guidanceScale
+        self.evictEncoder = evictEncoder
         self.modelsRootDirectory = modelsRootDirectory
     }
 
     /// Distilled fast tier (the default): klein-4B, 4-step, guidance 1.0 (no CFG).
-    public static func turbo(quant: Quant = .bf16, snapshotPath: String? = nil) -> KleinConfiguration {
+    public static func turbo(quant: Quant = .bf16, snapshotPath: String? = nil,
+                             evictEncoder: Bool = false) -> KleinConfiguration {
         KleinConfiguration(repo: "mlx-community/FLUX.2-klein-4B-bf16", quant: quant,
-                           snapshotPath: snapshotPath, defaultSteps: 4, guidanceScale: 1.0)
+                           snapshotPath: snapshotPath, defaultSteps: 4, guidanceScale: 1.0,
+                           evictEncoder: evictEncoder)
     }
 
     /// Base quality tier: klein-base-4B, ~28-step with two-pass CFG (guidance 4.0) + negative prompts.
-    public static func base(quant: Quant = .bf16, snapshotPath: String? = nil) -> KleinConfiguration {
+    public static func base(quant: Quant = .bf16, snapshotPath: String? = nil,
+                            evictEncoder: Bool = false) -> KleinConfiguration {
         KleinConfiguration(repo: "mlx-community/FLUX.2-klein-base-4B-bf16", quant: quant,
-                           snapshotPath: snapshotPath, defaultSteps: 28, guidanceScale: 4.0)
+                           snapshotPath: snapshotPath, defaultSteps: 28, guidanceScale: 4.0,
+                           evictEncoder: evictEncoder)
     }
 
-    private enum CodingKeys: String, CodingKey { case repo, revision, quant, defaultSteps, guidanceScale }
+    private enum CodingKeys: String, CodingKey {
+        case repo, revision, quant, defaultSteps, guidanceScale, evictEncoder
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -57,6 +70,7 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         quant = try c.decode(Quant.self, forKey: .quant)
         defaultSteps = try c.decodeIfPresent(Int.self, forKey: .defaultSteps) ?? 4
         guidanceScale = try c.decodeIfPresent(Float.self, forKey: .guidanceScale) ?? 1.0
+        evictEncoder = try c.decodeIfPresent(Bool.self, forKey: .evictEncoder) ?? false
     }
 }
 
