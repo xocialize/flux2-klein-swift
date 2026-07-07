@@ -25,12 +25,15 @@ public final class Klein4BBaseT2IPackage: ModelPackage {
             requirements: RequirementsManifest(
                 // Same resident envelope as distilled (identical architecture / weight sizes —
                 // delegates to the same inner Klein4BT2IPackage / shared KleinGenerator). Activation
-                // is higher: two-pass CFG runs the DiT twice per step. Measured via klein-cli
-                // @1024²/28-step base (bf16). phys re-baseline pending in-app.
+                // is higher: two-pass CFG runs the DiT twice per step (and the edit path doubles the
+                // sequence). RE-BASELINED to in-app phys (IMAGE_AUTORUN, 2026-07-06): int4 base-edit
+                // CFG floor 9.33 / peak 21.68 (activation 12.35); int8/bf16 scale resident by the
+                // DiT-weight delta, activation held. Encoder-evict lowers this the same way as the
+                // distilled tier (KleinConfiguration.FootprintConfigured).
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 16_000_000_000, peakActivationBytes: 10_000_000_000),
-                    QuantFootprint(quant: .int8, residentBytes: 12_000_000_000, peakActivationBytes: 10_000_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 11_000_000_000, peakActivationBytes: 10_000_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 12_400_000_000),
+                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 12_400_000_000),
+                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 12_400_000_000),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),

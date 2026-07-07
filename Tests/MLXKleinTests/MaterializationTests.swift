@@ -90,6 +90,18 @@ final class MaterializationTests: XCTestCase {
         XCTAssertTrue(Set(names).isDisjoint(with: distilled))
     }
 
+    func testEvictSurfacesLowerFootprintHint() {
+        // Non-evict ⇒ nil ⇒ governor uses the static QuantFootprint.
+        XCTAssertNil(KleinConfiguration(quant: .int4).residentBytesHint)
+        XCTAssertNil(KleinConfiguration(quant: .int4).peakActivationBytesHint)
+        // Evict ⇒ the light-tier phys hint (≈5 GB), so the 16 GB tier is admissible.
+        let evict = KleinConfiguration.turbo(quant: .int4, evictEncoder: true)
+        XCTAssertNotNil(evict.residentBytesHint)
+        XCTAssertLessThan(evict.residentBytesHint!, 6_000_000_000)
+        XCTAssertNotNil(evict.peakActivationBytesHint)
+        XCTAssertLessThan(evict.peakActivationBytesHint!, 6_000_000_000)
+    }
+
     func testGuidanceScaleCodableRoundTrip() throws {
         let cfg = KleinConfiguration.base(quant: .int8)
         let decoded = try JSONDecoder().decode(KleinConfiguration.self, from: JSONEncoder().encode(cfg))

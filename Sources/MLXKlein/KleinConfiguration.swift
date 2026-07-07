@@ -5,7 +5,7 @@
 import Foundation
 import MLXToolKit
 
-public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConfigured {
+public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConfigured, FootprintConfigured {
     /// mlx-community repo (bf16; int8/int4 quantize at load from it).
     public var repo: String
     public var revision: String?
@@ -72,6 +72,14 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         guidanceScale = try c.decodeIfPresent(Float.self, forKey: .guidanceScale) ?? 1.0
         evictEncoder = try c.decodeIfPresent(Bool.self, forKey: .evictEncoder) ?? false
     }
+
+    // MARK: FootprintConfigured — the encoder-evict "light tier" has a far lower footprint than the
+    // static QuantFootprint (which declares the resident-encoder path). Surfacing it here makes the
+    // 16 GB tier genuinely *admissible*, not just physically fittable. Measured in-app (phys) at int4
+    // @768² (the intended low-RAM resolution): floor 5.13 GB / peak 10.06 GB (activation 4.93 GB).
+    // Non-evict ⇒ nil ⇒ the governor uses the matched QuantFootprint.
+    public var residentBytesHint: UInt64? { evictEncoder ? 5_200_000_000 : nil }
+    public var peakActivationBytesHint: UInt64? { evictEncoder ? 5_000_000_000 : nil }
 }
 
 extension KleinConfiguration: WeightSourcing {

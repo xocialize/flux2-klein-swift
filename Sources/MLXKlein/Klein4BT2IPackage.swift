@@ -37,15 +37,17 @@ public final class Klein4BT2IPackage: ModelPackage {
             provenance: Provenance(sourceRepo: "black-forest-labs/FLUX.2-klein-4B", revision: "main", tier: 1),
             requirements: RequirementsManifest(
                 // Split footprint (efficiency contract 1.14.0). Resident = DiT + Qwen3-4B encoder
-                // + FLUX.2 VAE. Measured via klein-cli @1024²/4-step:
-                //   bf16: DiT 7.75 GB + encoder ~8 GB + VAE ~0.3 GB ≈ 16 GB; peak ~24 GB.
-                //   int4: DiT 2.35 GB + encoder ~8 GB (bf16) + VAE 0.3 ≈ 11 GB; peak 19.2 GB.
-                // [residentBytes = measured active post-load; peakActivationBytes GPU-smoke —
-                //  under-reads process phys ~2.7× (BiRefNet); phys re-baseline pending in-app.]
+                // + FLUX.2 VAE; activation = the 1024² denoise scratch (~quant-independent). Numbers
+                // RE-BASELINED to in-app phys (IMAGE_AUTORUN, 2026-07-06): int4 floor 9.32 / peak 20.54
+                // (activation 11.22). int8/bf16 scale resident by the DiT-weight delta (int4 2.35 →
+                // int8 ~4.5 → bf16 7.75), activation held. NOTE: the encoder-evict light tier is FAR
+                // lower (phys @768² floor 5.13 / peak 10.06) — surfaced dynamically via
+                // KleinConfiguration.FootprintConfigured when evictEncoder is set, so the 16 GB tier is
+                // admissible without changing these resident-path defaults.
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 16_000_000_000, peakActivationBytes: 8_000_000_000),
-                    QuantFootprint(quant: .int8, residentBytes: 12_000_000_000, peakActivationBytes: 8_000_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 11_000_000_000, peakActivationBytes: 8_000_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 11_200_000_000),
+                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 11_200_000_000),
+                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 11_200_000_000),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
