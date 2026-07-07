@@ -8,8 +8,15 @@ Two products:
 - **`Klein`** — the engine-agnostic generator core (DiT + FLUX.2 VAE via the neutral
   [`flux2-vae-mlx-swift`](https://github.com/xocialize/flux2-vae-mlx-swift) package + Qwen3-4B
   encoder + scheduler + pipeline).
-- **`MLXKlein`** — the conformant MLXEngine wrapper: `Klein4BT2IPackage` (surface
-  `flux2-klein-4b-t2i`), `textToImage`, selected by `PackageID`.
+- **`MLXKlein`** — the conformant MLXEngine wrappers, both `textToImage` + `imageEdit`, selected by
+  `PackageID`:
+  - **`Klein4BT2IPackage`** (surfaces `flux2-klein-4b-t2i` / `-edit`) — the **distilled** tier:
+    4-step, guidance 1.0 (no CFG), ~6 s @1024². Fast.
+  - **`Klein4BBaseT2IPackage`** (surfaces `flux2-klein-4b-base-t2i` / `-base-edit`) — the **base /
+    quality** tier: the non-distilled checkpoint run with classic two-pass CFG (guidance 4.0) +
+    **negative prompts** over ~28 steps. Stronger adherence on dense scenes / text / fine attributes
+    and on subject-preserving edits, at ~2× the forward cost per step (CFG) — plus the edit path
+    doubles the sequence, so a base edit is ~4× a base T2I.
 
 > **Status: complete · wrapped · GPU-validated.** Parity vs diffusers goldens (fp32/CPU): DiT
 > cosine **≥0.9999995** at the 64×64 production grid (all 5 double + 20 single blocks, norm_out,

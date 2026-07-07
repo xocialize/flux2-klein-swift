@@ -13,6 +13,9 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     public var quant: Quant
     public var snapshotPath: String?
     public var defaultSteps: Int
+    /// Default CFG scale. Distilled tier = 1.0 (guidance ignored, single forward). Base tier > 1
+    /// enables two-pass classifier-free guidance + negative prompt (see KleinPipeline).
+    public var guidanceScale: Float
     public var modelsRootDirectory: URL?
 
     public init(
@@ -21,6 +24,7 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         quant: Quant = .bf16,
         snapshotPath: String? = nil,
         defaultSteps: Int = 4,
+        guidanceScale: Float = 1.0,
         modelsRootDirectory: URL? = nil
     ) {
         self.repo = repo
@@ -28,10 +32,23 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         self.quant = quant
         self.snapshotPath = snapshotPath
         self.defaultSteps = defaultSteps
+        self.guidanceScale = guidanceScale
         self.modelsRootDirectory = modelsRootDirectory
     }
 
-    private enum CodingKeys: String, CodingKey { case repo, revision, quant, defaultSteps }
+    /// Distilled fast tier (the default): klein-4B, 4-step, guidance 1.0 (no CFG).
+    public static func turbo(quant: Quant = .bf16, snapshotPath: String? = nil) -> KleinConfiguration {
+        KleinConfiguration(repo: "mlx-community/FLUX.2-klein-4B-bf16", quant: quant,
+                           snapshotPath: snapshotPath, defaultSteps: 4, guidanceScale: 1.0)
+    }
+
+    /// Base quality tier: klein-base-4B, ~28-step with two-pass CFG (guidance 4.0) + negative prompts.
+    public static func base(quant: Quant = .bf16, snapshotPath: String? = nil) -> KleinConfiguration {
+        KleinConfiguration(repo: "mlx-community/FLUX.2-klein-base-4B-bf16", quant: quant,
+                           snapshotPath: snapshotPath, defaultSteps: 28, guidanceScale: 4.0)
+    }
+
+    private enum CodingKeys: String, CodingKey { case repo, revision, quant, defaultSteps, guidanceScale }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -39,6 +56,7 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         revision = try c.decodeIfPresent(String.self, forKey: .revision)
         quant = try c.decode(Quant.self, forKey: .quant)
         defaultSteps = try c.decodeIfPresent(Int.self, forKey: .defaultSteps) ?? 4
+        guidanceScale = try c.decodeIfPresent(Float.self, forKey: .guidanceScale) ?? 1.0
     }
 }
 

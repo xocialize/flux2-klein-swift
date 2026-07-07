@@ -117,9 +117,13 @@ public final class Klein4BT2IPackage: ModelPackage {
             let width = ((t2i.width ?? 1024) / 16) * 16
             let height = ((t2i.height ?? 1024) / 16) * 16
             let steps = t2i.steps ?? configuration.defaultSteps
-            prof.beginRun("flux2-klein textToImage steps=\(steps) \(width)x\(height)")
+            // Base tier: request guidance overrides the config default (>1 ⇒ two-pass CFG + negative
+            // prompt). Distilled config default is 1.0 ⇒ single forward, negative ignored.
+            let guidance = Float(t2i.guidanceScale ?? Double(configuration.guidanceScale))
+            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) \(width)x\(height)")
             let (pixels, w, h) = generator.generate(
-                prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0)
+                prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
+                negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
             return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
@@ -131,10 +135,12 @@ public final class Klein4BT2IPackage: ModelPackage {
             let steps = edit.steps ?? configuration.defaultSteps
             // Decode each conditioning image → [1,3,height,width] in [-1,1] (scaled to target).
             let refs = try edit.images.map { try Self.decodeReference($0, dim: width) }
-            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) \(width)x\(height)")
+            let guidance = Float(edit.guidanceScale ?? Double(configuration.guidanceScale))
+            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) g=\(guidance) \(width)x\(height)")
             let (pixels, w, h) = generator.generateEdit(
                 prompt: edit.prompt, referenceImages: refs, width: width, height: height,
-                steps: steps, seed: edit.seed ?? 0)
+                steps: steps, seed: edit.seed ?? 0,
+                negativePrompt: edit.negativePrompt, guidanceScale: guidance)
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
             return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))

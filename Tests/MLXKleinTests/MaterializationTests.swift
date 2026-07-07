@@ -58,4 +58,42 @@ final class MaterializationTests: XCTestCase {
         XCTAssertEqual(decoded.quant, .int4)
         XCTAssertEqual(decoded.defaultSteps, 4)
     }
+
+    // MARK: - Base (quality) tier
+
+    func testBaseMATGatePasses() throws {
+        let (dir, cleanup) = try satisfiedSnapshot(); defer { cleanup() }
+        let report = MaterializationConformance.check(
+            freshConfiguration: KleinConfiguration.base(quant: .int4),
+            satisfiedConfiguration: KleinConfiguration.base(quant: .int4, snapshotPath: dir.path))
+        XCTAssertTrue(report.passed, report.summary)
+    }
+
+    func testBaseFactoryDefaults() {
+        let base = KleinConfiguration.base()
+        XCTAssertEqual(base.repo, "mlx-community/FLUX.2-klein-base-4B-bf16")
+        XCTAssertEqual(base.defaultSteps, 28)
+        XCTAssertEqual(base.guidanceScale, 4.0)   // CFG on
+        let turbo = KleinConfiguration.turbo()
+        XCTAssertEqual(turbo.repo, "mlx-community/FLUX.2-klein-4B-bf16")
+        XCTAssertEqual(turbo.defaultSteps, 4)
+        XCTAssertEqual(turbo.guidanceScale, 1.0)  // no CFG (distilled)
+    }
+
+    func testBaseManifestApacheAndSurfaces() {
+        XCTAssertEqual(Klein4BBaseT2IPackage.manifest.license.weightLicense, .apache2)
+        let names = Klein4BBaseT2IPackage.manifest.surfaces.map(\.name)
+        XCTAssertTrue(names.contains("flux2-klein-4b-base-t2i"))
+        XCTAssertTrue(names.contains("flux2-klein-4b-base-edit"))
+        // Distinct surfaces from the distilled tier so both co-resist, selectable by PackageID.
+        let distilled = Set(Klein4BT2IPackage.manifest.surfaces.map(\.name))
+        XCTAssertTrue(Set(names).isDisjoint(with: distilled))
+    }
+
+    func testGuidanceScaleCodableRoundTrip() throws {
+        let cfg = KleinConfiguration.base(quant: .int8)
+        let decoded = try JSONDecoder().decode(KleinConfiguration.self, from: JSONEncoder().encode(cfg))
+        XCTAssertEqual(decoded.guidanceScale, 4.0)
+        XCTAssertEqual(decoded.defaultSteps, 28)
+    }
 }

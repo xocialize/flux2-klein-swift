@@ -61,10 +61,18 @@ public enum KleinPipeline {
 
     /// promptEmbeds: [txtLen, 7680] (real tokens). initPacked injects the packed initial
     /// latents [1, seq, 128] (parity path); nil → drawn from MLXRandom.
+    ///
+    /// CFG (base tier): the distilled klein ignores guidance (single forward, guidance=nil). The
+    /// **base** checkpoint is NOT guidance-distilled — it runs classic two-pass classifier-free
+    /// guidance (diffusers `Flux2KleinPipeline`, `do_classifier_free_guidance = guidance_scale > 1
+    /// and not is_distilled`): `noise = neg + scale·(pos − neg)`, with `guidance=nil` to the DiT in
+    /// both passes (guidance_embeds is false on base too). Pass `negativeEmbeds` + `guidanceScale > 1`
+    /// to enable it; leave `negativeEmbeds` nil for the distilled fast path.
     public static func generate(
         transformer: Flux2Transformer,
         vae: Flux2VAE?,
         promptEmbeds: MLXArray,
+        negativeEmbeds: MLXArray? = nil,
         height: Int = 1024, width: Int = 1024,
         numInferenceSteps: Int = 4,
         guidanceScale: Float = 1.0,
@@ -91,12 +99,27 @@ public enum KleinPipeline {
         let txtIds = textIds(promptEmbeds.shape[0])
         let encoder = promptEmbeds[.newAxis, 0..., 0...]   // [1, txtLen, 7680]
 
+        // Base-tier CFG: both prompt + negative are padded to the same 512-token length by the text
+        // encoder, so the negative pass reuses the same txtIds (DiT applies no padding mask).
+        let doCFG = guidanceScale > 1.0 && negativeEmbeds != nil
+        let negEncoder = negativeEmbeds.map { $0[.newAxis, 0..., 0...] }
+
         let (timesteps, sigmas) = Self.timestepsAndSigmas(imageSeqLen: seqLen, numSteps: numInferenceSteps)
         for i in 0..<numInferenceSteps {
-            let noise = transformer(
+            let t = MLXArray([timesteps[i]] as [Float])
+            let posNoise = transformer(
                 packed.asType(transformerDtype), encoder: encoder.asType(transformerDtype),
-                timestep: MLXArray([timesteps[i]] as [Float]), guidance: nil,
+                timestep: t, guidance: nil,
                 imgIds: imgIds, txtIds: txtIds).asType(.float32)
+            var noise = posNoise
+            if doCFG, let negEncoder {
+                let negNoise = transformer(
+                    packed.asType(transformerDtype), encoder: negEncoder.asType(transformerDtype),
+                    timestep: t, guidance: nil,
+                    imgIds: imgIds, txtIds: txtIds).asType(.float32)
+                // diffusers: noise_pred = neg + guidance_scale · (pos − neg)
+                noise = negNoise + guidanceScale * (posNoise - negNoise)
+            }
             // mflux Euler step: _step(noise, latents, sigmas[t+1], sigmas[t]) =
             // latents + (sigma_next − sigma) · noise  (dt negative, sigmas descending).
             let dt = sigmas[i + 1] - sigmas[i]

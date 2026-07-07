@@ -89,6 +89,9 @@ struct KleinCLI {
         // --edit <ref.png>: compositional multi-reference edit (comma-separate for multiple refs).
         let editRefs = opt("--edit")
         let quantBits = Int(opt("--quant") ?? "0")!
+        // Base tier: --guidance >1 enables two-pass CFG; --negative sets the negative prompt.
+        let guidance = Float(opt("--guidance") ?? "1.0")!
+        let negativePrompt = opt("--negative")
         let transformer = try timed("load DiT") { try KleinWeights.loadTransformer(snapshotPath: snapshot, dtype: .bfloat16) }
         if quantBits == 8 || quantBits == 4 {
             timed("quantize DiT int\(quantBits)") { KleinWeights.quantizeDiT(transformer, bits: quantBits) }
@@ -130,15 +133,19 @@ struct KleinCLI {
             let bnStd = MLX.sqrt(vaeArrays["bn.running_var"]!.asType(.float32).reshaped(1, -1, 1, 1) + 1e-4)
             let refs = editRefs.split(separator: ",").map { loadRefImage(String($0), size) }
             print("[cli] EDIT with \(refs.count) reference(s)")
+            let negEmbeds = guidance > 1.0 ? textEncoder.encode(negativePrompt ?? "") : nil
+            if guidance > 1.0 { print("[cli] BASE EDIT CFG guidance=\(guidance)") }
             result = KleinEditPipeline.generate(
                 transformer: transformer, vae: vae, vaeEncoder: vaeEnc, bnMean: bnMean, bnStd: bnStd,
-                promptEmbeds: embeds, referenceImages: refs, height: size, width: size,
-                numInferenceSteps: steps, seed: seed, transformerDtype: .bfloat16,
+                promptEmbeds: embeds, negativeEmbeds: negEmbeds, referenceImages: refs, height: size, width: size,
+                numInferenceSteps: steps, guidanceScale: guidance, seed: seed, transformerDtype: .bfloat16,
                 onStep: { i, n in print("[cli] step \(i)/\(n)") })
         } else {
+            let negEmbeds = guidance > 1.0 ? textEncoder.encode(negativePrompt ?? "") : nil
+            if guidance > 1.0 { print("[cli] BASE CFG guidance=\(guidance) neg=\"\(negativePrompt ?? "")\"") }
             result = KleinPipeline.generate(
-                transformer: transformer, vae: vae, promptEmbeds: embeds,
-                height: size, width: size, numInferenceSteps: steps, guidanceScale: 1.0,
+                transformer: transformer, vae: vae, promptEmbeds: embeds, negativeEmbeds: negEmbeds,
+                height: size, width: size, numInferenceSteps: steps, guidanceScale: guidance,
                 seed: seed, transformerDtype: .bfloat16,
                 onStep: { i, n in print("[cli] step \(i)/\(n)") })
         }

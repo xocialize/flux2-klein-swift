@@ -36,11 +36,15 @@ public enum KleinEditPipeline {
 
     /// Compositional edit: generate a target (from noise) conditioned on reference images.
     /// referenceImages: each [1,3,targetH,targetW] in [-1,1].
+    /// Base tier: pass `negativeEmbeds` + `guidanceScale > 1` for two-pass CFG on the edit
+    /// (reference tokens are identical in both passes; only the text conditioning differs). Leave
+    /// `negativeEmbeds` nil for the distilled single-forward path.
     public static func generate(
         transformer: Flux2Transformer, vae: Flux2VAE, vaeEncoder: KleinVAEEncoder,
         bnMean: MLXArray, bnStd: MLXArray,
-        promptEmbeds: MLXArray, referenceImages: [MLXArray],
+        promptEmbeds: MLXArray, negativeEmbeds: MLXArray? = nil, referenceImages: [MLXArray],
         height: Int = 1024, width: Int = 1024, numInferenceSteps: Int = 4,
+        guidanceScale: Float = 1.0,
         seed: UInt64 = 0, transformerDtype: DType = .bfloat16,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> KleinPipeline.Result {
@@ -66,16 +70,27 @@ public enum KleinEditPipeline {
         let encoder = promptEmbeds[.newAxis, 0..., 0...]
         let txtIds = KleinPipeline.textIds(promptEmbeds.shape[0])
         let refCat = refPacked.isEmpty ? nil : concatenated(refPacked, axis: 1)   // [1, refSeqTotal, 128]
+        let doCFG = guidanceScale > 1.0 && negativeEmbeds != nil
+        let negEncoder = negativeEmbeds.map { $0[.newAxis, 0..., 0...] }
 
         let (timesteps, sigmas) = KleinPipeline.timestepsAndSigmas(imageSeqLen: targetSeq, numSteps: numInferenceSteps)
         for i in 0..<numInferenceSteps {
             var hidden = packed
             if let refCat { hidden = concatenated([packed, refCat], axis: 1) }
-            let out = transformer(
+            let t = MLXArray([timesteps[i]] as [Float])
+            let posOut = transformer(
                 hidden.asType(transformerDtype), encoder: encoder.asType(transformerDtype),
-                timestep: MLXArray([timesteps[i]] as [Float]), guidance: nil,
+                timestep: t, guidance: nil,
                 imgIds: imgIds, txtIds: txtIds).asType(.float32)
-            let noise = out[0..., ..<targetSeq, 0...]        // keep only target tokens
+            var noise = posOut[0..., ..<targetSeq, 0...]        // keep only target tokens
+            if doCFG, let negEncoder {
+                let negOut = transformer(
+                    hidden.asType(transformerDtype), encoder: negEncoder.asType(transformerDtype),
+                    timestep: t, guidance: nil,
+                    imgIds: imgIds, txtIds: txtIds).asType(.float32)
+                let negNoise = negOut[0..., ..<targetSeq, 0...]
+                noise = negNoise + guidanceScale * (noise - negNoise)
+            }
             let dt = sigmas[i + 1] - sigmas[i]
             packed = packed + dt * noise
             eval(packed); MLX.Memory.clearCache()
