@@ -23,7 +23,8 @@ let package = Package(
         // FLUX.2 VAE — neutral in-house package shared with Lens/ERNIE; net dep, not re-ported.
         .package(url: "https://github.com/xocialize/flux2-vae-mlx-swift", from: "0.1.0"),
         .package(url: "https://github.com/xocialize/mlx-profiling.git", from: "0.1.0"),
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.21.0"),
+        // ≥0.27.0 for the CAN cancellation gate (MLXServeConformance.CancellationConformance).
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.27.0"),
     ],
     targets: [
         .target(

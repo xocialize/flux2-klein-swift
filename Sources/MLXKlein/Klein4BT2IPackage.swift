@@ -141,12 +141,17 @@ public final class Klein4BT2IPackage: ModelPackage {
         eval([pos] + (neg.map { [$0] } ?? []))   // materialize off the encoder graph
         enc = nil                                 // release the conditioner (last strong ref)
         MLX.Memory.clearCache()                   // reclaim the ~8 GB before the denoise peak
+        try Task.checkCancellation()              // CAN seam: encode done, before the denoise loop
         return (pos, neg)
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
-        guard let generator else { throw PackageError.notLoaded }
+        // CAN-1: the entry checkpoint is the FIRST act of run() — before notLoaded validation
+        // (engine ≥ 0.27.0). Mid-run cadence: post-encode seam in encodeAndEvict, per-denoise-step
+        // `Task.isCancelled` break in KleinPipeline/KleinEditPipeline, cancelled-task decode skip,
+        // and the post-generate checkpoints below rethrow CancellationError unchanged.
         try Task.checkCancellation()
+        guard let generator else { throw PackageError.notLoaded }
         let prof = MLXProfiler.shared
 
         if let t2i = request as? T2IRequest {

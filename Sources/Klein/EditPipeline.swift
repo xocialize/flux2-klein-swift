@@ -75,6 +75,9 @@ public enum KleinEditPipeline {
 
         let (timesteps, sigmas) = KleinPipeline.timestepsAndSigmas(imageSeqLen: targetSeq, numSteps: numInferenceSteps)
         for i in 0..<numInferenceSteps {
+            // Cooperative cancellation: bail per denoise step (non-throwing core API — the
+            // MLXKlein wrapper's post-call `try Task.checkCancellation()` rethrows).
+            if Task.isCancelled { break }
             var hidden = packed
             if let refCat { hidden = concatenated([packed, refCat], axis: 1) }
             let t = MLXArray([timesteps[i]] as [Float])
@@ -97,6 +100,8 @@ public enum KleinEditPipeline {
             onStep?(i + 1, numInferenceSteps)
         }
 
+        // A cancelled task skips the VAE decode (pre-decode seam) — latents-only result.
+        if Task.isCancelled { return KleinPipeline.Result(latents: packed, image: nil) }
         let unpacked = packed.asType(.float32).reshaped(1, gridH, gridW, 128).transposed(0, 3, 1, 2)
         let image = vae.decodePackedLatents(unpacked)
         eval(image)

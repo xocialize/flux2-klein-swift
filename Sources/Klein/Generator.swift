@@ -48,7 +48,10 @@ public final class KleinGenerator {
             transformer: transformer, vae: vae, promptEmbeds: promptEmbeds, negativeEmbeds: negativeEmbeds,
             height: height, width: width, numInferenceSteps: steps, guidanceScale: guidanceScale,
             seed: seed, transformerDtype: transformerDtype, onStep: onStep)
-        return Self.toPixels(result.image![0])
+        // image is nil only when the run's task was cancelled (decode skipped); the engine
+        // wrapper's post-call checkpoint rethrows before these pixels are consumed.
+        guard let image = result.image else { return ([], width, height) }
+        return Self.toPixels(image[0])
     }
 
     /// Multi-reference edit from pre-computed conditioning.
@@ -65,7 +68,9 @@ public final class KleinGenerator {
             promptEmbeds: promptEmbeds, negativeEmbeds: negativeEmbeds, referenceImages: referenceImages,
             height: height, width: width, numInferenceSteps: steps, guidanceScale: guidanceScale,
             seed: seed, transformerDtype: transformerDtype, onStep: onStep)
-        return Self.toPixels(result.image![0])
+        // Cancelled-task decode skip — see generate(promptEmbeds:...).
+        guard let image = result.image else { return ([], width, height) }
+        return Self.toPixels(image[0])
     }
 
     // MARK: - Prompt-based entry points (resident-encoder path; used by the CLI + non-evict tier)
