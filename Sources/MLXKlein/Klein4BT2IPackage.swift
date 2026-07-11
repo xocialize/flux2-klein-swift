@@ -94,6 +94,16 @@ public final class Klein4BT2IPackage: ModelPackage {
         case .int4: KleinWeights.quantizeDiT(transformer, bits: 4)
         default: break
         }
+        // Optional LoRA: applied AFTER quantize so the activation-path add rides the QLoRALinear
+        // (int4-safe) — turns this klein into a RefControl/style specialty. Same code path the CLI
+        // `--lora` exercises. loraStrength scales the ΔW contribution.
+        if let loraPath = configuration.loraPath {
+            let url = URL(fileURLWithPath: loraPath)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw KleinPackageError.unreadableSnapshot("LoRA not found: \(loraPath)")
+            }
+            try KleinLoRA.apply(loRAs: [(url, configuration.loraStrength)], to: transformer, dtype: .bfloat16)
+        }
         let vae = try Flux2VAEWeights.loadVAE(directory: snapshot.appendingPathComponent("vae"), dtype: .float32)
         // Edit path: VAE encoder + bn stats (small; enables the imageEdit surface).
         let vaeEncoder = try KleinWeights.loadVAEEncoder(snapshotPath: snapshot.path, dtype: .float32)

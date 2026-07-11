@@ -23,6 +23,20 @@ struct KleinCLI {
         func flag(_ n: String) -> Bool {
             if let i = args.firstIndex(of: n) { args.remove(at: i); return true }; return false
         }
+        // lora-smoke <lora.safetensors>: STRUCTURAL smoke — build a Flux2Transformer at config
+        // dims (random init, no weights), apply the LoRA, print how many Linears were adapted per
+        // block array. No inference / no Metal compute.
+        if args.first == "lora-smoke" {
+            guard args.count >= 2 else {
+                print("usage: klein-cli lora-smoke <lora.safetensors>"); return
+            }
+            let loraURL = URL(fileURLWithPath: args[1])
+            let dit = Flux2Transformer()   // config dims, random init — structural only
+            let s = try KleinLoRA.apply(loRA: loraURL, to: dit)
+            print("[lora-smoke] \(loraURL.lastPathComponent): adapted "
+                + "double=\(s.doubleTargets) single=\(s.singleTargets) total=\(s.total)")
+            return
+        }
         // --pkg-edit <ref.png>: drive the real package's imageEdit surface (IEditRequest).
         if let editPath = opt("--pkg-edit") {
             let snap = opt("--snapshot") ?? URL(fileURLWithPath: #filePath)
@@ -100,6 +114,17 @@ struct KleinCLI {
             timed("quantize DiT int\(quantBits)") { KleinWeights.quantizeDiT(transformer, bits: quantBits) }
             MLX.Memory.clearCache()
             print("[cli] DiT resident post-quant: \(MLX.Memory.activeMemory / (1 << 20)) MB")
+        }
+        // --lora <path> [--lora-strength <s>]: apply a RefControl (or any) LoRA over the
+        // (optionally int4) base — validates the runtime activation-path applicator incl. the
+        // QLoRALinear path. For RefControl: --edit <control.png>,<reference.png>.
+        if let loraPath = opt("--lora") {
+            let strength = Float(opt("--lora-strength") ?? "1.0")!
+            let summary = try timed("apply LoRA") {
+                try KleinLoRA.apply(loRA: URL(fileURLWithPath: loraPath), to: transformer,
+                                    dtype: .bfloat16, strength: strength)
+            }
+            print("[cli] LoRA applied: double=\(summary.doubleTargets) single=\(summary.singleTargets) total=\(summary.total) @strength \(strength)")
         }
         let vae = try timed("load VAE") { try Flux2VAEWeights.loadVAE(directory: URL(fileURLWithPath: snapshot).appendingPathComponent("vae"), dtype: .float32) }
         let encoder = try timed("load encoder") { try KleinWeights.loadTextEncoder(snapshotPath: snapshot, dtype: .bfloat16) }
