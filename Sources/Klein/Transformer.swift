@@ -341,7 +341,45 @@ public final class Flux2ParallelSelfAttention: Module {
         var attn = AttentionUtils.computeAttention(q, k, v, heads: heads, headDim: dimHead)
         mlpHidden = Flux2FeedForward.swiglu(mlpHidden)
         attn = concatenated([attn, mlpHidden], axis: -1)
-        return toOut(attn)
+        return outProjected(attn)
+    }
+
+    /// mlx-swift ≤0.31.6 JIT-compiles the steel split-K NAX GEMM (dispatched at
+    /// M·N ≥ 2048², K ≥ 10240, K ≥ 3·max(M,N), HALF PRECISION ONLY) with the wrong
+    /// dtype (mlx#3797) → bf16 garbage/NaN on M5-class GPUs. This to_out
+    /// (K = innerDim 3072 + mlpHidden 9216 = 12288, N = 3072) is in the window at
+    /// M = txt(512 padded)+img tokens ∈ [1366, 4096] — probe-confirmed NaN/1e21 at
+    /// the exact production shape [1, 2816, 12288] in bf16 (768² t2i). 512²–896² t2i
+    /// and 512²-class edits (packed target+ref) all land in-band; 1024² t2i
+    /// (M = 4608) sits just above it.
+    ///
+    /// Klein is currently SHIELDED by accident, not by design: temb is computed in
+    /// fp32 and MLX promotion (fp32 mod × bf16 stream → fp32) makes the whole
+    /// single-block activation stream fp32, which the half-precision-only window
+    /// never dispatches. This chunk is therefore dormant armor — it engages
+    /// automatically if the activation flow ever becomes true bf16 (e.g. a
+    /// Boogu-style bf16-activation speedup). Chunking is mathematically exact
+    /// (output rows independent); same workaround as mage-flow-swift's
+    /// downProjected. Fixed upstream in ml-explore/mlx#3810 (2026-07-07); on any
+    /// mlx-swift bump run `klein-cli --nax-probe` and on PASS remove this chunk
+    /// together with the mage-flow-swift / qwen3vl-mlx-swift / boogu-image-swift
+    /// ones (boogu-image-swift/tools/check_mlx_swift_3810.sh checks whether a tag
+    /// vendors mlx ≥ a8c3e9c).
+    func outProjected(_ x: MLXArray) -> MLXArray {
+        // KLEIN_NO_CHUNK disables the workaround — for validating a fixed
+        // mlx-swift (run `klein-cli --nax-probe` first).
+        if ProcessInfo.processInfo.environment["KLEIN_NO_CHUNK"] != nil { return toOut(x) }
+        let tokens = x.dim(-2)
+        let rowLimit = 896
+        guard x.dtype != .float32, tokens > rowLimit else { return toOut(x) }
+        var parts: [MLXArray] = []
+        var start = 0
+        while start < tokens {
+            let end = min(start + rowLimit, tokens)
+            parts.append(toOut(x[.ellipsis, start ..< end, 0...]))
+            start = end
+        }
+        return concatenated(parts, axis: -2)
     }
 }
 

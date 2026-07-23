@@ -40,7 +40,10 @@ public final class Klein4BT2IPackage: ModelPackage {
                 // + FLUX.2 VAE; activation = the 1024² denoise scratch (~quant-independent). Numbers
                 // RE-BASELINED to in-app phys (IMAGE_AUTORUN, 2026-07-06): int4 floor 9.32 / peak 20.54
                 // (activation 11.22). int8/bf16 scale resident by the DiT-weight delta (int4 2.35 →
-                // int8 ~4.5 → bf16 7.75), activation held. NOTE: the encoder-evict light tier is FAR
+                // int8 ~4.5 → bf16 7.75), activation held. Activation baselines assume the DiT's
+                // fp32 activation stream (temb promotion — see Flux2ParallelSelfAttention.
+                // outProjected): a future true-bf16 activation flow would shrink activation but
+                // MUST keep the NAX row-chunk armed (mlx#3797). NOTE: the encoder-evict light tier is FAR
                 // lower (phys @768² floor 5.13 / peak 10.06) — surfaced dynamically via
                 // KleinConfiguration.FootprintConfigured when evictEncoder is set, so the 16 GB tier is
                 // admissible without changing these resident-path defaults.

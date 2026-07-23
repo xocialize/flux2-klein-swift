@@ -73,6 +73,17 @@ int8/int4 are produced at load from the bf16 snapshot. Upstream:
   DiT the **full 512-token** padded sequence (causal+padding mask), via the Qwen chat template
   (`add_generation_prompt=True, enable_thinking=False`).
 - VAE = FLUX.2 (32 latent channels), reused verbatim from `flux2-vae-mlx-swift`.
+- **DiT dtype**: weights load bf16, but the *activation stream runs fp32* — temb is computed in
+  fp32 and MLX promotion (fp32 modulation × bf16 stream → fp32) carries it through every block.
+  This incidentally shields Klein from the mlx-swift ≤0.31.6 NAX split-K GEMM bug (mlx#3797,
+  half-precision-only dispatch window; the single-block `to_out` K=12288/N=3072 would otherwise
+  corrupt at M = 512 txt + img tokens ∈ [1366, 4096] — i.e. 512²–896² t2i and 512²-class edits;
+  probe-confirmed NaN at the exact production shape in bf16). `Flux2ParallelSelfAttention.
+  outProjected` carries a dormant ≤896-row chunk (exact; `KLEIN_NO_CHUNK` env disables) that arms
+  automatically if the activation flow ever becomes true bf16. On any mlx-swift bump run
+  `klein-cli --nax-probe`; on PASS delete the chunk together with the mage-flow-swift /
+  qwen3vl-mlx-swift / boogu-image-swift ones (mlx#3810 ships the fix upstream;
+  `boogu-image-swift/tools/check_mlx_swift_3810.sh` checks a tag's vendored mlx).
 - **Multi-reference editing** (klein's differentiator, **v0.2.0**): compose a new image from one or
   more reference images via reference-token conditioning — the reference subject is VAE-encoded,
   patchified, bn-normalized, packed, and appended to the target sequence with a 4D-RoPE t-offset
@@ -85,5 +96,8 @@ int8/int4 are produced at load from the bf16 snapshot. Upstream:
 - Offline: `swift test --filter MLXKleinTests` (MAT + conformance, no weights).
 - Parity/GPU: `KLEIN_PARITY=1 swift test` (fp32/CPU) and `swift run -c release klein-cli`
   (`--quant 4`, `--pkg-e2e`, …).
+- Kernel probe (weights-free, run after any mlx-swift bump):
+  `swift run -c release klein-cli --nax-probe` — exercises the single-block `to_out` GEMM shape
+  in bf16 across the corruption band; PASS means the mlx#3797 row-chunk is removable.
 
 License: port code MIT; model weights Apache-2.0 (Black Forest Labs).

@@ -23,6 +23,59 @@ struct KleinCLI {
         func flag(_ n: String) -> Bool {
             if let i = args.firstIndex(of: n) { args.remove(at: i); return true }; return false
         }
+        // --nax-probe: weights-free NAX split-K GEMM probe at the exact Klein single-block
+        // to_out shape (K = innerDim 3072 + mlpHidden 9216 = 12288, N = 3072). mlx-swift
+        // ≤0.31.6 JIT-miscompiles the steel split-K NAX GEMM (mlx#3797, fixed by mlx#3810):
+        // dispatch window M·N ≥ 2048², K ≥ 10240, K ≥ 3·max(M,N), half precision only →
+        // M ∈ [1366, 4096] broken (NaN/1e21 on this machine, incl. the [1,M,K] Linear call
+        // shape), M=1024 / M≥4608 clean. NOTE: production renders are currently clean
+        // anyway — fp32 temb promotion makes the DiT activation stream fp32, outside the
+        // half-precision window (see Flux2ParallelSelfAttention.outProjected). Run after
+        // any mlx-swift bump to decide whether the row-chunk can be dropped. GPU stream on
+        // purpose — the bug is in the JIT-compiled Metal kernel.
+        if flag("--nax-probe") {
+            var lcg: UInt64 = 0x9E37_79B9_7F4A_7C15
+            func rand(_ n: Int) -> [Float] {
+                (0 ..< n).map { _ in
+                    lcg = lcg &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    return Float(Int64(bitPattern: lcg >> 11)) / Float(Int64.max >> 11)
+                }
+            }
+            func cosine(_ a: MLXArray, _ b: MLXArray) -> Float {
+                let x = a.asType(.float32).flattened()
+                let y = b.asType(.float32).flattened()
+                let d = (x * y).sum().item(Float.self)
+                let nx = sqrt((x * x).sum()).item(Float.self)
+                let ny = sqrt((y * y).sum()).item(Float.self)
+                return nx * ny == 0 ? 1 : d / (nx * ny)
+            }
+            let (K, N) = (12288, 3072)   // Klein single-block to_out
+            let b = MLXArray(rand(N * K), [N, K]).asType(.bfloat16)
+            var ok = true
+            for m in [1024, 1366, 2048, 2816, 4096, 4608] {
+                let a = MLXArray(rand(m * K), [m, K]).asType(.bfloat16)
+                let y = matmul(a, b.T)
+                let yRef = matmul(a.asType(.float32), b.asType(.float32).T)
+                eval(y, yRef)
+                let mab = abs(y.asType(.float32) - yRef).max().item(Float.self)
+                let c = cosine(y, yRef)
+                let pass = c > 0.999 && mab.isFinite && mab < 100
+                if !pass { ok = false }
+                print(String(format: "  M=%d K=%d N=%d bf16: cos %.8f max_abs %.3e  %@",
+                             m, K, N, c, mab, (pass ? "OK" : "BROKEN") as NSString))
+                // 3-D Linear-shaped variant [1, M, K] — the production call shape.
+                let y3 = matmul(a.reshaped([1, m, K]), b.T)
+                eval(y3)
+                let mab3 = abs(y3.asType(.float32).reshaped([m, N]) - yRef).max().item(Float.self)
+                let c3 = cosine(y3, yRef)
+                let pass3 = c3 > 0.999 && mab3.isFinite && mab3 < 100
+                if !pass3 { ok = false }
+                print(String(format: "  M=%d K=%d N=%d bf16 [1,M,K]: cos %.8f max_abs %.3e  %@",
+                             m, K, N, c3, mab3, (pass3 ? "OK" : "BROKEN") as NSString))
+            }
+            print("[nax-probe] \(ok ? "PASS — kernel fixed, row-chunk removable" : "FAIL — keep the row-chunk")")
+            exit(ok ? 0 : 1)
+        }
         // lora-smoke <lora.safetensors>: STRUCTURAL smoke — build a Flux2Transformer at config
         // dims (random init, no weights), apply the LoRA, print how many Linears were adapted per
         // block array. No inference / no Metal compute.
