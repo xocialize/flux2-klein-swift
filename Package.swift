@@ -23,10 +23,9 @@ let package = Package(
         // FLUX.2 VAE — neutral in-house package shared with Lens/ERNIE; net dep, not re-ported.
         .package(url: "https://github.com/xocialize/flux2-vae-mlx-swift", from: "0.1.0"),
         .package(url: "https://github.com/xocialize/mlx-profiling.git", from: "0.1.0"),
-        // ≥0.27.0 for the CAN cancellation gate (MLXServeConformance.CancellationConformance).
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.27.0"),
-        // Auto-materialization downloader (v0.19.0 WeightSourcing contract, wrapper target only).
-        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
+        // ≥0.32.0 for engine-executed first-run materialization (contract 1.24.0);
+        // the package no longer carries its own WeightMaterializer.
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.32.0"),
     ],
     targets: [
         .target(
@@ -52,7 +51,6 @@ let package = Package(
                 .product(name: "MLXToolKit", package: "mlx-engine-swift"),
                 .product(name: "MLXProfiling", package: "mlx-profiling"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
-                .product(name: "HuggingFace", package: "swift-huggingface"),
             ],
             path: "Sources/MLXKlein"
         ),

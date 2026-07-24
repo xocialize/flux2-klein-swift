@@ -88,18 +88,10 @@ public final class Klein4BT2IPackage: ModelPackage {
     public func load() async throws {
         guard generator == nil else { return }
 
-        // v0.19.0 auto-materialization: download any missing declared sources into
-        // the store layout (WeightMaterializer forwards WeightDownloadProgress, so
-        // the engine surfaces a real .downloading phase). Explicit-snapshot and
-        // already-materialized configs skip this entirely (no network).
-        let missing = configuration.missingWeightSources(storeRoot: configuration.modelsRootDirectory)
-        if !missing.isEmpty {
-            guard let root = configuration.modelsRootDirectory else {
-                throw WeightMaterializer.MaterializeError.noStoreRoot
-            }
-            try await WeightMaterializer.materialize(missing, into: root)
-        }
-
+        // First-run materialization is engine-executed since mlx-engine-swift 0.32.0
+        // (contract 1.24.0): resident()/prepare() downloads missing WeightSourcing
+        // sources before load() runs. The guard below stays as the offline backstop —
+        // absent weights with no store root still fail legibly here.
         guard let snapshot = configuration.resolvedSnapshotDirectory(storeRoot: configuration.modelsRootDirectory),
             FileManager.default.fileExists(atPath: snapshot.appendingPathComponent("transformer").path)
         else { throw KleinPackageError.unreadableSnapshot(configuration.snapshotPath ?? configuration.repo) }

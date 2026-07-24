@@ -37,7 +37,9 @@ final class MaterializationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let cfg = KleinConfiguration()
         XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).count, 1)
-        let dir = root.appending(path: "mlx-community/FLUX.2-klein-4B-bf16")
+        // Path from ModelStore so the fixture tracks the engine's canonical layout
+        // (models--org--name since contract 1.22.0) instead of a stale literal.
+        let dir = ModelStore(root: root).directory(for: "mlx-community/FLUX.2-klein-4B-bf16")!
         for sub in ["transformer", "vae"] {
             try FileManager.default.createDirectory(at: dir.appending(path: sub), withIntermediateDirectories: true)
         }
