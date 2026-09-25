@@ -154,15 +154,14 @@ public final class KleinVAEEncoder: Module {
         // quant_conv: 1x1 over the 2*latent moments.
         self._quantConv.wrappedValue = Conv2d(inputChannels: 2 * latentChannels, outputChannels: 2 * latentChannels, kernelSize: 1, stride: 1, padding: 0)
         super.init()
+        if let route = KleinVAEConvRoute.environmentOverride { convRoute = route }
     }
 
-    /// Whether in-window 3×3 convs take the exact conv3d route (default) instead of mlx's lossy
-    /// Winograd conv2d. `false` is for A/B validation only (WinogradFreeConv2d.swift).
-    public var winogradFreeConvs: Bool {
-        get { modules().allSatisfy { ($0 as? WinogradFreeConv2d)?.enabled ?? true } }
-        set {
-            for case let conv as WinogradFreeConv2d in modules() { conv.enabled = newValue }
-        }
+    /// Route for the in-window 3×3 convs (WinogradFreeConv2d.swift). Default `.conv3d`: the raw
+    /// Winograd loss is material for edit references (3.4e-3 vs 1.2e-3 in the latent mean).
+    public var convRoute: KleinVAEConvRoute {
+        get { modules().lazy.compactMap { ($0 as? WinogradFreeConv2d)?.route }.first ?? .conv3d }
+        set { for case let conv as WinogradFreeConv2d in modules() { conv.route = newValue } }
     }
 
     /// image: [B, 3, H, W] in [-1,1] → mean [B, latentC, H/8, W/8] (NCHW).

@@ -42,9 +42,9 @@ final class WinogradProbeTests: XCTestCase {
                 eval(r)
                 return r
             }
-            conv.enabled = false
+            conv.route = .winograd
             let raw = conv(x)
-            conv.enabled = true
+            conv.route = .conv3d
             let routed = conv(x)
             eval(raw, routed)
             let r0 = Self.relL2(raw, ref)

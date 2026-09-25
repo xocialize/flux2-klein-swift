@@ -42,8 +42,9 @@ final class E1bVAEEncoderGPULaneTests: XCTestCase {
     static func gpuRun(_ enc: KleinVAEEncoder, route: Bool, reps: Int = 3, _ f: () -> MLXArray)
         -> (MLXArray, Double)
     {
-        enc.winogradFreeConvs = route
-        defer { enc.winogradFreeConvs = true }
+        let saved = enc.convRoute
+        enc.convRoute = route ? .conv3d : .winograd
+        defer { enc.convRoute = saved }
         var out = f()
         eval(out)
         let t0 = Date()

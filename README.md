@@ -112,7 +112,7 @@ groups 1, C % 32 == 0, O % 32 == 0, C + O ≥ 256 and N·H·W ≥ 4096. On M5 th
 
 `KleinVAEEncoder` has 21 such convs per 1024² reference image, and E1 ran on the CPU lane only.
 Every stride-1 3×3 conv is now a `WinogradFreeConv2d`, which routes only the in-window shapes
-through `conv3d` with kT = 1.
+through `conv3d` with kT = 1. That is the default (`encoder.convRoute`, type `KleinVAEConvRoute`).
 
 Measurements: encode mean against the CPU lane, on a real DIV2K photo at 512² and 1024².
 
@@ -126,6 +126,6 @@ Measurements: encode mean against the CPU lane, on a real DIV2K photo at 512² a
 - At 1024² with TF32 off it is 2.2e-5. The CPU lane's own GroupNorm error grows with group size
   (8e-5 at 1024² against float64), which is why the gate asserts at 512².
 - The decoder comes from `flux2-vae-mlx-swift`, which carries the same route in its own release.
-- For A/B validation, set `KLEIN_VAE_WINOGRAD=1` or `encoder.winogradFreeConvs = false`.
+- For A/B validation, set `KLEIN_VAE_CONV_ROUTE=winograd` or `encoder.convRoute = .winograd`.
 
 License: port code MIT; model weights Apache-2.0 (Black Forest Labs).
