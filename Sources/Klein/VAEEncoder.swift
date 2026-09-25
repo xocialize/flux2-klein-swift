@@ -3,6 +3,10 @@
 // edit path (reference images must be VAE-encoded); flux2-vae-mlx-swift is decoder-only.
 // Block structure copy-adapted from z-image-swift Autoencoder.swift (FLUX.1 AE encoder, 118 dB),
 // with 32 latent channels + quant_conv (use_quant_conv=true). Returns the deterministic MEAN.
+//
+// Every stride-1 3×3 conv is a WinogradFreeConv2d: at ≥512² nearly all of them fall inside mlx's
+// lossy Winograd conv2d window, and the class reroutes exactly those shapes through conv3d
+// (kT = 1). Numbers and removal path: WinogradFreeConv2d.swift, README "GPU numerics".
 
 import Foundation
 import MLX
@@ -22,9 +26,9 @@ private final class EncResnetBlock2D: Module {
 
     init(_ inC: Int, _ outC: Int, groups: Int = 32, eps: Float = 1e-6) {
         self._norm1.wrappedValue = groupNorm(groups, inC, eps)
-        self._conv1.wrappedValue = Conv2d(inputChannels: inC, outputChannels: outC, kernelSize: 3, stride: 1, padding: 1)
+        self._conv1.wrappedValue = WinogradFreeConv2d(inputChannels: inC, outputChannels: outC, kernelSize: 3, stride: 1, padding: 1)
         self._norm2.wrappedValue = groupNorm(groups, outC, eps)
-        self._conv2.wrappedValue = Conv2d(inputChannels: outC, outputChannels: outC, kernelSize: 3, stride: 1, padding: 1)
+        self._conv2.wrappedValue = WinogradFreeConv2d(inputChannels: outC, outputChannels: outC, kernelSize: 3, stride: 1, padding: 1)
         if inC != outC {
             self._convShortcut.wrappedValue = Conv2d(inputChannels: inC, outputChannels: outC, kernelSize: 1, stride: 1, padding: 0)
         }
@@ -114,7 +118,7 @@ private final class Encoder: Module {
     @ModuleInfo(key: "conv_out") var convOut: Conv2d
 
     init(inC: Int, latentC: Int, blockOut: [Int], layersPerBlock: Int, groups: Int = 32, eps: Float = 1e-6) {
-        self._convIn.wrappedValue = Conv2d(inputChannels: inC, outputChannels: blockOut[0], kernelSize: 3, stride: 1, padding: 1)
+        self._convIn.wrappedValue = WinogradFreeConv2d(inputChannels: inC, outputChannels: blockOut[0], kernelSize: 3, stride: 1, padding: 1)
         var blocks: [EncDownBlock2D] = []
         var outC = blockOut[0]
         for (i, boc) in blockOut.enumerated() {
@@ -124,7 +128,7 @@ private final class Encoder: Module {
         self._downBlocks.wrappedValue = blocks
         self._midBlock.wrappedValue = EncMidBlock2D(blockOut.last!, groups: groups, eps: eps)
         self._convNormOut.wrappedValue = groupNorm(groups, blockOut.last!, eps)
-        self._convOut.wrappedValue = Conv2d(inputChannels: blockOut.last!, outputChannels: 2 * latentC, kernelSize: 3, stride: 1, padding: 1)
+        self._convOut.wrappedValue = WinogradFreeConv2d(inputChannels: blockOut.last!, outputChannels: 2 * latentC, kernelSize: 3, stride: 1, padding: 1)
         super.init()
     }
     func callAsFunction(_ x: MLXArray) -> MLXArray {
@@ -150,6 +154,15 @@ public final class KleinVAEEncoder: Module {
         // quant_conv: 1x1 over the 2*latent moments.
         self._quantConv.wrappedValue = Conv2d(inputChannels: 2 * latentChannels, outputChannels: 2 * latentChannels, kernelSize: 1, stride: 1, padding: 0)
         super.init()
+    }
+
+    /// Whether in-window 3×3 convs take the exact conv3d route (default) instead of mlx's lossy
+    /// Winograd conv2d. `false` is for A/B validation only (WinogradFreeConv2d.swift).
+    public var winogradFreeConvs: Bool {
+        get { modules().allSatisfy { ($0 as? WinogradFreeConv2d)?.enabled ?? true } }
+        set {
+            for case let conv as WinogradFreeConv2d in modules() { conv.enabled = newValue }
+        }
     }
 
     /// image: [B, 3, H, W] in [-1,1] → mean [B, latentC, H/8, W/8] (NCHW).
