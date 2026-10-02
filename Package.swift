@@ -26,11 +26,13 @@ let package = Package(
         // ≥0.32.0 for engine-executed first-run materialization (contract 1.24.0);
         // the package no longer carries its own WeightMaterializer.
         .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.32.0"),
+        .package(url: "https://github.com/xocialize/mlx-exact-conv-swift", from: "0.1.0"),
     ],
     targets: [
         .target(
             name: "Klein",
             dependencies: [
+                .product(name: "MLXExactConv", package: "mlx-exact-conv-swift"),
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),

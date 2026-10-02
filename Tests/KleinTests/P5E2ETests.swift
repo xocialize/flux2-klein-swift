@@ -13,6 +13,7 @@ import XCTest
 @testable import Klein
 
 final class P5E2ETests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -34,7 +35,6 @@ final class P5E2ETests: XCTestCase {
 
     func testE2EIsolation() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1", "KLEIN_PARITY=1")
-        Device.setDefault(device: .cpu)
         let vae = try Flux2VAEWeights.loadVAE(directory: URL(fileURLWithPath: Self.snapshotPath).appendingPathComponent("vae"), dtype: .float32)
         let g = try MLX.loadArrays(url: Self.goldensDir.appendingPathComponent("klein_e2e.safetensors"))
         let finalLatents = g["final_latents"]!.asType(.float32)   // [1,32,128,128]

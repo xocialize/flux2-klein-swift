@@ -9,6 +9,7 @@ import XCTest
 @testable import Klein
 
 final class P4EncoderTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -24,7 +25,6 @@ final class P4EncoderTests: XCTestCase {
     func testEncoderTapFeatures() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1",
                           "set KLEIN_PARITY=1 to run the P4 gate")
-        Device.setDefault(device: .cpu)
 
         let encoder = try KleinWeights.loadTextEncoder(snapshotPath: Self.snapshotPath, dtype: .float32)
         let g = try MLX.loadArrays(url: Self.goldensDir.appendingPathComponent("klein_encoder.safetensors"))

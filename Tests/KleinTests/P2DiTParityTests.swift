@@ -8,6 +8,7 @@ import XCTest
 @testable import Klein
 
 final class P2DiTParityTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -22,7 +23,6 @@ final class P2DiTParityTests: XCTestCase {
 
     nonisolated(unsafe) static let model: Flux2Transformer? = {
         guard ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1" else { return nil }
-        Device.setDefault(device: .cpu)
         return try! KleinWeights.loadTransformer(snapshotPath: snapshotPath, dtype: .float32)
     }()
 
@@ -44,7 +44,6 @@ final class P2DiTParityTests: XCTestCase {
     func testDiTParity() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1",
                           "set KLEIN_PARITY=1 to run the P2 gate")
-        Device.setDefault(device: .cpu)
         let model = Self.model!
         let g = try MLX.loadArrays(url: Self.goldensDir.appendingPathComponent("klein_dit.safetensors"))
 

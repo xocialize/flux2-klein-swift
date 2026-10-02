@@ -8,6 +8,8 @@ import XCTest
 @testable import Klein
 
 final class E1VAEEncoderTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
+
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Tests/goldens")
@@ -18,7 +20,6 @@ final class E1VAEEncoderTests: XCTestCase {
 
     func testVAEEncodeParity() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1", "KLEIN_PARITY=1")
-        Device.setDefault(device: .cpu)
         let enc = try KleinWeights.loadVAEEncoder(snapshotPath: Self.snapshotPath, dtype: .float32)
         let g = try MLX.loadArrays(url: Self.goldensDir.appendingPathComponent("klein_vae_encode.safetensors"))
         let image = g["image"]!.asType(.float32)   // [1,3,256,256] NCHW

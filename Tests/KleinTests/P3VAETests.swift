@@ -9,6 +9,7 @@ import XCTest
 @testable import Klein
 
 final class P3VAETests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -24,7 +25,6 @@ final class P3VAETests: XCTestCase {
     func testVAEDecodeParity() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["KLEIN_PARITY"] == "1",
                           "set KLEIN_PARITY=1 to run the P3 gate")
-        Device.setDefault(device: .cpu)
 
         let vaeDir = URL(fileURLWithPath: Self.snapshotPath).appendingPathComponent("vae")
         let vae = try Flux2VAEWeights.loadVAE(directory: vaeDir, dtype: .float32)
