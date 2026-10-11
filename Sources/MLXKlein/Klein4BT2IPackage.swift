@@ -25,6 +25,20 @@ public enum KleinPackageError: Error, LocalizedError {
     }
 }
 
+/// Forwards the core's ambient phase events into the engine's `RunProgress` plane (contract
+/// 1.18.0, ENGINE-NEEDS V2; AB-A-0139). The engine binds `RunProgress.sink` as a task-local
+/// around `run()`; the core reports into its own engine-free `KleinProgress` sink, and this
+/// closure joins the two. The core's phase names ARE the canonical `RunPhase` constants, so raw
+/// values forward with no mapping table.
+///
+/// Namespaced rather than inlined so the offline suite can exercise the mapping without weights.
+enum KleinProgressBridge {
+    static let forward: KleinProgress.Sink = { e in
+        RunProgress.report(RunPhase(rawValue: e.phase.rawValue),
+                           step: e.step, totalSteps: e.totalSteps)
+    }
+}
+
 @InferenceActor
 public final class Klein4BT2IPackage: ModelPackage {
     public typealias Configuration = KleinConfiguration
@@ -153,6 +167,7 @@ public final class Klein4BT2IPackage: ModelPackage {
     private func encodeAndEvict(prompt: String, negativePrompt: String?, guidance: Float) async throws
         -> (pos: MLXArray, neg: MLXArray?) {
         guard let encoderProvider else { throw PackageError.notLoaded }
+        RunProgress.report(.encode)               // the encoder (re)load + text conditioning
         var enc: KleinTextEncoder? = try await encoderProvider()
         let pos = enc!.encode(prompt)
         let neg = guidance > 1.0 ? enc!.encode(negativePrompt ?? "") : nil
@@ -168,6 +183,8 @@ public final class Klein4BT2IPackage: ModelPackage {
         // (engine ≥ 0.27.0). Mid-run cadence: post-encode seam in encodeAndEvict, per-denoise-step
         // `Task.isCancelled` break in KleinPipeline/KleinEditPipeline, cancelled-task decode skip,
         // and the post-generate checkpoints below rethrow CancellationError unchanged.
+        // Progress: encode (here on the evict path, in the core otherwise) → denoise per step →
+        // decode, via KleinProgress bound around each generator call; PNG encode is postprocess.
         try Task.checkCancellation()
         guard let generator else { throw PackageError.notLoaded }
         let prof = MLXProfiler.shared
@@ -184,16 +201,21 @@ public final class Klein4BT2IPackage: ModelPackage {
             if configuration.evictEncoder {
                 let (pos, neg) = try await encodeAndEvict(
                     prompt: t2i.prompt, negativePrompt: t2i.negativePrompt, guidance: guidance)
-                (pixels, w, h) = generator.generate(
-                    promptEmbeds: pos, negativeEmbeds: neg, width: width, height: height,
-                    steps: steps, seed: t2i.seed ?? 0, guidanceScale: guidance)
+                (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
+                    generator.generate(
+                        promptEmbeds: pos, negativeEmbeds: neg, width: width, height: height,
+                        steps: steps, seed: t2i.seed ?? 0, guidanceScale: guidance)
+                }
             } else {
-                (pixels, w, h) = generator.generate(
-                    prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
-                    negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
+                (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
+                    generator.generate(
+                        prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
+                        negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
+                }
             }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
+            RunProgress.report(.postprocess)
             return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
         }
 
@@ -209,17 +231,22 @@ public final class Klein4BT2IPackage: ModelPackage {
             if configuration.evictEncoder {
                 let (pos, neg) = try await encodeAndEvict(
                     prompt: edit.prompt, negativePrompt: edit.negativePrompt, guidance: guidance)
-                (pixels, w, h) = generator.generateEdit(
-                    promptEmbeds: pos, negativeEmbeds: neg, referenceImages: refs, width: width,
-                    height: height, steps: steps, seed: edit.seed ?? 0, guidanceScale: guidance)
+                (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
+                    generator.generateEdit(
+                        promptEmbeds: pos, negativeEmbeds: neg, referenceImages: refs, width: width,
+                        height: height, steps: steps, seed: edit.seed ?? 0, guidanceScale: guidance)
+                }
             } else {
-                (pixels, w, h) = generator.generateEdit(
-                    prompt: edit.prompt, referenceImages: refs, width: width, height: height,
-                    steps: steps, seed: edit.seed ?? 0,
-                    negativePrompt: edit.negativePrompt, guidanceScale: guidance)
+                (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
+                    generator.generateEdit(
+                        prompt: edit.prompt, referenceImages: refs, width: width, height: height,
+                        steps: steps, seed: edit.seed ?? 0,
+                        negativePrompt: edit.negativePrompt, guidanceScale: guidance)
+                }
             }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
+            RunProgress.report(.postprocess)
             return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
         }
 

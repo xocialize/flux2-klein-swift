@@ -82,6 +82,7 @@ public final class KleinGenerator {
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         guard let textEncoder else { fatalError("prompt path requires a resident textEncoder") }
+        KleinProgress.report(.encode)
         let embeds = textEncoder.encode(prompt)
         let negEmbeds = (guidanceScale > 1.0) ? textEncoder.encode(negativePrompt ?? "") : nil
         return generateEdit(promptEmbeds: embeds, negativeEmbeds: negEmbeds, referenceImages: referenceImages,
@@ -98,6 +99,7 @@ public final class KleinGenerator {
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         guard let textEncoder else { fatalError("prompt path requires a resident textEncoder") }
+        KleinProgress.report(.encode)
         let embeds = textEncoder.encode(prompt)
         let negEmbeds = (guidanceScale > 1.0) ? textEncoder.encode(negativePrompt ?? "") : nil
         return generate(promptEmbeds: embeds, negativeEmbeds: negEmbeds, width: width, height: height,

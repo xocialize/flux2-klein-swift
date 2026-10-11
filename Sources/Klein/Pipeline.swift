@@ -105,6 +105,7 @@ public enum KleinPipeline {
         let negEncoder = negativeEmbeds.map { $0[.newAxis, 0..., 0...] }
 
         let (timesteps, sigmas) = Self.timestepsAndSigmas(imageSeqLen: seqLen, numSteps: numInferenceSteps)
+        KleinProgress.report(.denoise)
         for i in 0..<numInferenceSteps {
             // Cooperative cancellation: bail per denoise step (non-throwing core API — the
             // MLXKlein wrapper's post-call `try Task.checkCancellation()` rethrows).
@@ -129,11 +130,13 @@ public enum KleinPipeline {
             packed = packed + dt * noise
             eval(packed)
             MLX.Memory.clearCache()
+            KleinProgress.report(.denoise, step: i + 1, totalSteps: numInferenceSteps)
             onStep?(i + 1, numInferenceSteps)
         }
 
         // A cancelled task skips the VAE decode (pre-decode seam) — latents-only result.
         guard let vae, !Task.isCancelled else { return Result(latents: packed, image: nil) }
+        KleinProgress.report(.decode)
         // unpack [1, seq, 128] → [1, 128, gridH, gridW] then decodePackedLatents (bn-denorm + unpatch + decode)
         let unpacked = packed.asType(.float32).reshaped(1, gridH, gridW, 128).transposed(0, 3, 1, 2)
         let image = vae.decodePackedLatents(unpacked)

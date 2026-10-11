@@ -56,6 +56,23 @@ let edit = try await package.run(IEditRequest(
 await package.unload()
 ```
 
+## Run-phase progress (v0.8.1, AB-A-0139)
+
+The packages report into the engine's `RunProgress` plane (contract 1.18.0), so a host shows
+`denoise 5/8` instead of an unexplained "running". The phases, in order:
+
+| phase | covers | steps? |
+|---|---|---|
+| `encode` | Qwen3-4B conditioning (the encoder reload on the evict tier, reported by the wrapper), and the VAE encode of the reference images on the edit path | no |
+| `denoise` | the flow-matching Euler loop: once at loop entry with no step, then after each completed step | **yes** — `step i/N`, 1-based |
+| `decode` | FLUX.2 VAE decode — one eval, so no per-chunk counts | no |
+| `postprocess` | PNG encode (reported by the wrapper, after the model is done) | no |
+
+The core stays engine-free: `Klein` reports into its own `KleinProgress` task-local sink, and
+`MLXKlein` forwards those events into `RunProgress` (`KleinProgressBridge`). Nothing bound ⇒ no-op, so the
+CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
+or reads `engine.runProgress`.
+
 ## Weights
 
 bf16 snapshot on Hugging Face (Apache-2.0), materialized by the engine (`WeightSourcing`) or via

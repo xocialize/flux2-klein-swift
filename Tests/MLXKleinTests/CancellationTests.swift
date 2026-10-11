@@ -53,7 +53,8 @@ final class CancellationTests: XCTestCase {
     /// decode are single forwards (seams, not recurring units).
     private var posture: CancellationConformance.CheckpointPosture {
         .cadence([
-            .init(phase: .denoise, unit: .step)
+            // RunProgress-evidenced (AB-A-0139): the same loop seam reports `.denoise` step i/N.
+            .init(phase: .denoise, unit: .step, reportsRunProgress: true)
         ])
     }
 
