@@ -96,21 +96,27 @@ struct KleinCLI {
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("weights/FLUX.2-klein-4B").path
-            let pkg = Klein4BT2IPackage(configuration: .init(quant: .bf16, snapshotPath: snap))
+            // --quant 4|8 and --evict pick the tier (as --pkg-e2e does); --size sets the edit's output side.
+            let quantBits = opt("--quant").flatMap { Int($0) }   // opt() consumes the flag: read it once
+            let q: Quant = quantBits == 4 ? .int4 : quantBits == 8 ? .int8 : .bf16
+            let evict = flag("--evict")
+            let pkg = Klein4BT2IPackage(configuration: .init(quant: q, snapshotPath: snap, evictEncoder: evict))
             let surfaces = Klein4BT2IPackage.manifest.surfaces.map(\.name).joined(separator: ", ")
-            print("[pkg-edit] surfaces=[\(surfaces)]")
-            try await pkg.load()
+            print("[pkg-edit] surfaces=[\(surfaces)] quant=\(q) evict=\(evict)")
+            let t0 = Date(); try await pkg.load()
+            print("[pkg-edit] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s | resident floor \(MLX.Memory.activeMemory / (1 << 20))MB")
             let refData = try Data(contentsOf: URL(fileURLWithPath: editPath))
+            let sz = Int(opt("--size") ?? "1024")!
             let t1 = Date()
             let resp = try await pkg.run(IEditRequest(
-                images: [Image(format: .png, data: refData, width: 1024, height: 1024)],
+                images: [Image(format: .png, data: refData, width: sz, height: sz)],
                 prompt: opt("--prompt") ?? "the fox sitting on a sunny tropical beach, photorealistic",
-                width: 1024, height: 1024, seed: 5)) as! IEditResponse
+                width: sz, height: sz, seed: 5)) as! IEditResponse
             print("[pkg-edit] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s → "
                   + "\(resp.image.data.count) bytes .\(resp.image.format)")
             try resp.image.data.write(to: URL(fileURLWithPath: opt("--out") ?? "klein_pkg_edit.png"))
+            print("[pkg-edit] PEAK \(MLX.Memory.peakMemory / (1 << 20))MB | quant=\(q) evict=\(evict) size=\(sz)")
             await pkg.unload()
-            print("[pkg-edit] peak \(MLX.Memory.peakMemory / (1 << 20))MB; done")
             return
         }
         // --pkg-e2e: drive the real Klein4BT2IPackage (load→run→decode).
