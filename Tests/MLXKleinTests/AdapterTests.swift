@@ -75,6 +75,21 @@ final class AdapterTests: XCTestCase {
             [ref], capability: .textToImage, quant: .int8) { id in catalog.first { $0.id == id } })
     }
 
+    /// The deprecated load-time adapter still builds a specialty package (ModelSheetStudio's pose
+    /// tier sets it), and a missing file still fails load() legibly.
+    func testDeprecatedLoadTimeLoRA() async {
+        var config = KleinConfiguration.turbo(snapshotPath: "/nonexistent-klein-snapshot")
+        config.loraPath = "/nonexistent.safetensors"
+        config.loraStrength = 0.8
+        XCTAssertEqual(config.loraStrength, 0.8)
+        do {
+            try await Klein4BT2IPackage(configuration: config).load()
+            XCTFail("load() passed with no snapshot")
+        } catch {
+            XCTAssertTrue("\(error)".contains("nonexistent-klein-snapshot"), "\(error)")
+        }
+    }
+
     func testTwoICAdaptersAreRefused() {
         func ic(_ id: String) -> ResolvedAdapter {
             ResolvedAdapter(id: id, kind: .referenceConditioned, format: .bflFused,

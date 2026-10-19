@@ -95,7 +95,9 @@ sha256-checks the files, and hands the package `resolvedAdapters`. The package r
   - fal's four plain adapters target 8 of these, and before v0.10.0 they were silently dropped.
   - BFL's `final_layer.adaLN_modulation.1` is refused: diffusers' conversion swaps its scale and shift halves, so its
     delta isn't a rename.
-- **The load-time `KleinConfiguration.loraPath` / `loraStrength` are gone.**
+- **The load-time `KleinConfiguration.loraPath` / `loraStrength` are deprecated** (v0.10.1 restored them after 0.10.0
+  removed them). A configuration that sets one builds a specialty package around that adapter, as ModelSheetStudio's
+  pose tier does. It is applied at load and stays under every request's adapters.
 - **IC footprints** (AB-R-0593): ×1.012 (refcontrol-pose, 2 references) and ×1.013 (tryon, 3) over a no-adapter
   text-to-image control, at 1024² int8. Klein's peak is the 1024² VAE decode, so references barely move it. Declared
   as 1.02 each.

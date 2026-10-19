@@ -22,8 +22,12 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     /// per request. Default off (keep it resident: faster, for 32 GB+).
     public var evictEncoder: Bool
     public var modelsRootDirectory: URL?
-    // Adapters are per request since v0.10.0 (`T2IRequest`/`IEditRequest.adapters`, contract
-    // 1.53.0); the load-time `loraPath` / `loraStrength` are gone (AB-A-0192).
+    /// Deprecated since v0.10.0: name adapters per request instead (`T2IRequest` / `IEditRequest
+    /// .adapters`, contract 1.53.0, AB-A-0192). Kept for apps that built a specialty package around
+    /// one local adapter (ModelSheetStudio's pose tier): it is applied at load and stays under every
+    /// request's adapters. Env-specific ⇒ excluded from Codable.
+    public var loraPath: String?
+    public var loraStrength: Float
 
     public init(
         repo: String = "mlx-community/FLUX.2-klein-4B-bf16",
@@ -33,7 +37,9 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         defaultSteps: Int = 4,
         guidanceScale: Float = 1.0,
         evictEncoder: Bool = false,
-        modelsRootDirectory: URL? = nil
+        modelsRootDirectory: URL? = nil,
+        loraPath: String? = nil,
+        loraStrength: Float = 1.0
     ) {
         self.repo = repo
         self.revision = revision
@@ -43,6 +49,8 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         self.guidanceScale = guidanceScale
         self.evictEncoder = evictEncoder
         self.modelsRootDirectory = modelsRootDirectory
+        self.loraPath = loraPath
+        self.loraStrength = loraStrength
     }
 
     /// Distilled fast tier (the default): klein-4B, 4-step, guidance 1.0 (no CFG).
@@ -73,6 +81,8 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         defaultSteps = try c.decodeIfPresent(Int.self, forKey: .defaultSteps) ?? 4
         guidanceScale = try c.decodeIfPresent(Float.self, forKey: .guidanceScale) ?? 1.0
         evictEncoder = try c.decodeIfPresent(Bool.self, forKey: .evictEncoder) ?? false
+        loraPath = nil          // env-specific runtime override; not persisted
+        loraStrength = 1.0
     }
 
     // MARK: FootprintConfigured — the encoder-evict "light tier" has a far lower footprint than the

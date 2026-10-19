@@ -133,8 +133,10 @@ public final class Klein4BT2IPackage: ModelPackage {
     private var generator: KleinGenerator?
     /// Applies each request's adapters to the resident DiT, and restores the base between sets.
     private var swapper: KleinLoRASwapper?
-    /// The adapter set on the DiT now (sha256 and strength per adapter, in request order).
+    /// The request adapter set on the DiT now (sha256 and strength per adapter, in request order).
     private var appliedAdapters: [String] = []
+    /// The deprecated load-time adapter (`KleinConfiguration.loraPath`), kept under every request's set.
+    private var residentLoRA: [(url: URL, strength: Float)] = []
     /// Encoder-evict mode only: loads the Qwen3-4B conditioner on demand (nil when the encoder is
     /// held resident inside the generator).
     private var encoderProvider: (() async throws -> KleinTextEncoder)?
@@ -160,7 +162,18 @@ public final class Klein4BT2IPackage: ModelPackage {
         }
         // Adapters are per request (contract 1.53.0): the swapper attaches each run's set AFTER
         // quantize, so the activation-path add rides QLoRALinear on int8/int4.
-        swapper = KleinLoRASwapper(model: transformer, dtype: .bfloat16)
+        let swapper = KleinLoRASwapper(model: transformer, dtype: .bfloat16)
+        // The deprecated load-time adapter, applied now and kept under every request's set.
+        residentLoRA = []
+        if let loraPath = configuration.loraPath {
+            let url = URL(fileURLWithPath: loraPath)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw KleinPackageError.unreadableSnapshot("LoRA not found: \(loraPath)")
+            }
+            residentLoRA = [(url, configuration.loraStrength)]
+            try swapper.set(residentLoRA)
+        }
+        self.swapper = swapper
         appliedAdapters = []
         let vae = try Flux2VAEWeights.loadVAE(directory: snapshot.appendingPathComponent("vae"), dtype: .float32)
         // Edit path: VAE encoder + bn stats (small; enables the imageEdit surface).
@@ -194,6 +207,7 @@ public final class Klein4BT2IPackage: ModelPackage {
         generator = nil
         swapper = nil
         appliedAdapters = []
+        residentLoRA = []
         encoderProvider = nil
         MLX.Memory.clearCache()
     }
@@ -211,12 +225,12 @@ public final class Klein4BT2IPackage: ModelPackage {
         let wanted = adapters.map { "\($0.source.sha256)@\($0.strength)" }
         guard wanted != appliedAdapters else { return }
         do {
-            try swapper.set(adapters.map { ($0.fileURL, Float($0.strength)) })
+            try swapper.set(residentLoRA + adapters.map { ($0.fileURL, Float($0.strength)) })
         } catch {
             // set() checks the files before touching the DiT, but a failure part-way leaves an
-            // unknown set: restore the base so the next request starts clean.
-            swapper.detach()
+            // unknown set: go back to the load-time state so the next request starts clean.
             appliedAdapters = []
+            try? swapper.set(residentLoRA)
             throw error
         }
         appliedAdapters = wanted
