@@ -48,15 +48,16 @@ public final class Klein4BBaseT2IPackage: ModelPackage {
                         + "negative prompts over ~28 steps for stronger prompt adherence than the "
                         + "4-step distilled tier. Same 4B MMDiT + Qwen3-4B + FLUX.2 VAE.",
                     modes: []
-                ),
+                ).declaring(adapters: KleinAdapters.support(.textToImage)),
                 IEditContract.descriptor(
                     name: "flux2-klein-4b-base-edit",
                     summary: "FLUX.2-klein-base-4B multi-reference EDITING with CFG: compose from one "
                         + "or more reference images (subject/style/scene) with negative-prompt "
                         + "guidance for tighter instruction adherence than the distilled edit tier. "
-                        + "Pass conditioning images in prompt order.",
+                        + "Pass conditioning images in prompt order. A reference-conditioned adapter's "
+                        + "conditioning images lead the references, in slot order.",
                     modes: []
-                )
+                ).declaring(adapters: KleinAdapters.support(.imageEdit))
             ]
         )
     }

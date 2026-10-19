@@ -162,6 +162,70 @@ struct KleinCLI {
             await pkg.unload()
             return
         }
+        // --pkg-adapter <registry.json>: drive the real package with a typed adapter, as the engine
+        // hands it over (`resolvedAdapters`), and print floor / peak / activation — the matched-pair
+        // measurement behind an IC adapter's `AdapterFootprint` (AB-R-0591's method). With no
+        // --adapter it is the control arm: the same prompt, seed and size as text-to-image, with no
+        // adapter and no reference.
+        //   --adapter <id> --file <safetensors> [--cond role=png ...] [--image png ...]
+        //   [--strength s] [--quant 4|8] [--size 1024] [--out png]
+        if let registryPath = opt("--pkg-adapter") {
+            let snap = opt("--snapshot") ?? URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("weights/FLUX.2-klein-4B").path
+            let quantBits = opt("--quant").flatMap { Int($0) }
+            let q: Quant = quantBits == 4 ? .int4 : quantBits == 8 ? .int8 : .bf16
+            let sz = Int(opt("--size") ?? "1024")!
+            let prompt = opt("--prompt") ?? "a woman in a red coat standing in a sunlit city street, photorealistic"
+            let adapterID = opt("--adapter"), file = opt("--file"), strengthArg = opt("--strength").flatMap(Double.init)
+            let conds = opts("--cond"), images = opts("--image"), out = opt("--out") ?? "klein_pkg_adapter.png"
+            func png(_ path: String) throws -> Image {
+                Image(format: .png, data: try Data(contentsOf: URL(fileURLWithPath: path)), width: sz, height: sz)
+            }
+            var resolved: [ResolvedAdapter] = []
+            if let adapterID, let file {
+                struct Registry: Decodable { let adapters: [AdapterDescriptor] }
+                let registry = try JSONDecoder().decode(Registry.self,
+                                                        from: Data(contentsOf: URL(fileURLWithPath: registryPath)))
+                guard let d = registry.adapters.first(where: { $0.id == adapterID }) else {
+                    throw LoRARegistryError.unknownAdapter(adapterID)
+                }
+                let inputs = try conds.map { pair -> ConditioningInput in
+                    let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                    return ConditioningInput(role: parts[0], media: .image(try png(parts[1])))
+                }
+                resolved = [ResolvedAdapter(id: d.id, kind: d.kind, format: d.format,
+                                            fileURL: URL(fileURLWithPath: file), source: d.source,
+                                            strength: strengthArg ?? d.defaultStrength,
+                                            conditioning: try d.orderedConditioning(inputs),
+                                            footprint: d.resolvedFootprint)]
+            }
+            let edit = !images.isEmpty || !conds.isEmpty   // references → the edit surface
+            let pkg = Klein4BT2IPackage(configuration: .init(quant: q, snapshotPath: snap))
+            try await pkg.load()
+            MLX.Memory.clearCache()
+            let floor = MLX.Memory.activeMemory
+            MLX.Memory.peakMemory = 0   // the setter resets the peak
+            let t0 = Date()
+            let image: Image
+            if edit {
+                image = (try await pkg.run(IEditRequest(images: try images.map(png), prompt: prompt,
+                                                        width: sz, height: sz, seed: 42)
+                    .resolving(resolved)) as! IEditResponse).image
+            } else {
+                image = (try await pkg.run(T2IRequest(prompt: prompt, width: sz, height: sz, seed: 42)
+                    .resolving(resolved)) as! T2IResponse).image
+            }
+            let peak = MLX.Memory.peakMemory
+            try image.data.write(to: URL(fileURLWithPath: out))
+            func gb(_ b: Int) -> String { String(format: "%.2f", Double(b) / 1e9) }
+            print("[pkg-adapter] arm=\(adapterID ?? "control") surface=\(edit ? "edit" : "t2i") quant=\(q) size=\(sz) "
+                + "refs=\(images.count + conds.count) run=\(String(format: "%.1f", Date().timeIntervalSince(t0)))s "
+                + "floor=\(gb(floor)) peak=\(gb(peak)) act=\(gb(peak - floor)) GB → \(out)")
+            await pkg.unload()
+            return
+        }
         // --pkg-e2e: drive the real Klein4BT2IPackage (load→run→decode).
         if flag("--pkg-e2e") {
             let snap = opt("--snapshot") ?? URL(fileURLWithPath: #filePath)

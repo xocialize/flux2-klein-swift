@@ -73,7 +73,26 @@
           "int4"
         ],
         "checkpoint": "v2-step3500",
-        "gate": "applicator-validated"
+        "gate": "applicator-validated",
+        "footprint": {
+          "receipt": "AB-R-0593",
+          "method": "AB-R-0591 matched pair (no-adapter, no-reference t2i control)",
+          "checkpoint": "FLUX.2-klein-4B (distilled)",
+          "quant": "int8",
+          "size": "1024x1024",
+          "steps": 4,
+          "seed": 42,
+          "references": 2,
+          "controlActivationGB": 11.27,
+          "activationGB": 11.4,
+          "ratio": 1.012,
+          "note": "The 1024² VAE decode sets the peak; the reference tokens barely move it.",
+          "date": "2026-10-19"
+        }
+      },
+      "footprint": {
+        "residentBytes": 92405760,
+        "activationMultiplier": 1.02
       }
     },
     {
@@ -421,7 +440,26 @@
           "int4"
         ],
         "checkpoint": "step2000",
-        "gate": "applicator-validated-100-targets + E2E try-on + outfit-swap"
+        "gate": "applicator-validated-100-targets + E2E try-on + outfit-swap",
+        "footprint": {
+          "receipt": "AB-R-0593",
+          "method": "AB-R-0591 matched pair (no-adapter, no-reference t2i control)",
+          "checkpoint": "FLUX.2-klein-4B (distilled)",
+          "quant": "int8",
+          "size": "1024x1024",
+          "steps": 4,
+          "seed": 42,
+          "references": 3,
+          "controlActivationGB": 11.27,
+          "activationGB": 11.42,
+          "ratio": 1.013,
+          "note": "The 1024² VAE decode sets the peak; the reference tokens barely move it.",
+          "date": "2026-10-19"
+        }
+      },
+      "footprint": {
+        "residentBytes": 92405760,
+        "activationMultiplier": 1.02
       }
     }
   ],

@@ -25,6 +25,43 @@ public enum KleinPackageError: Error, LocalizedError {
     }
 }
 
+/// What every klein surface accepts in the way of adapters (contract 1.53.0, AB-A-0192): per-request
+/// adapters on the klein-4B base, in the BFL-fused and diffusers/PEFT dialects `KleinLoRA` reads, up
+/// to 4 rank-stacked. Reference-conditioned ("IC") adapters only on the edit surfaces, whose
+/// references carry their conditioning. Every quant: the delta rides `QLoRALinear` on int8/int4.
+public enum KleinAdapters {
+    /// The base-model key registry entries name (`AdapterDescriptor.baseModels`), for the distilled
+    /// and base checkpoints alike; a registry's clearance records which one was judged.
+    public static let baseModel = "flux2-klein-4b"
+    public static let formats: [AdapterFormat] = [.bflFused, .diffusersPEFT]
+
+    public static func support(_ capability: Capability) -> AdapterSupport {
+        AdapterSupport(baseModel: baseModel, formats: formats,
+                       kinds: capability == .imageEdit ? [.plain, .referenceConditioned] : [.plain],
+                       maxCount: 4, strengthRange: AdapterStrengthRange(min: 0, max: 2),
+                       quants: nil, binding: .perRequest)
+    }
+
+    /// Conditioning images of the request's IC adapter, in slot order — they lead the edit's
+    /// references (RefControl: the skeleton, then the subject). At most one IC adapter per request:
+    /// two would interleave their slots with no defined order.
+    static func conditioningImages(_ adapters: [ResolvedAdapter]) throws -> [Image] {
+        let ic = adapters.filter { $0.kind == .referenceConditioned }
+        guard ic.count <= 1 else {
+            throw PackageError.unsupportedRequestFeature(
+                "adapters — at most one reference-conditioned adapter per request (got "
+                    + ic.map(\.id).joined(separator: ", ") + ")")
+        }
+        return try (ic.first?.conditioning ?? []).map { input in
+            guard case .image(let image) = input.media else {
+                throw PackageError.unsupportedRequestFeature(
+                    "adapter \"\(ic[0].id)\" conditioning role \"\(input.role)\" — klein takes images only")
+            }
+            return image
+        }
+    }
+}
+
 /// Forwards the core's ambient phase events into the engine's `RunProgress` plane (contract
 /// 1.18.0, ENGINE-NEEDS V2; AB-A-0139). The engine binds `RunProgress.sink` as a task-local
 /// around `run()`; the core reports into its own engine-free `KleinProgress` sink, and this
@@ -78,21 +115,26 @@ public final class Klein4BT2IPackage: ModelPackage {
                         + "MMDiT distilled to 4 steps (guidance 1.0, no negative prompt), Qwen3-4B "
                         + "3-layer conditioning + FLUX.2 VAE; ~6 s @1024² int4 on a 16 GB Mac.",
                     modes: []
-                ),
+                ).declaring(adapters: KleinAdapters.support(.textToImage)),
                 IEditContract.descriptor(
                     name: "flux2-klein-4b-edit",
                     summary: "FLUX.2-klein-4B multi-reference EDITING (its differentiator): compose a "
                         + "new image from one or more reference images (subject/style/scene) via "
                         + "reference-token conditioning — 'the subject from image 1, on a beach'. "
-                        + "Pass conditioning images in prompt order.",
+                        + "Pass conditioning images in prompt order. A reference-conditioned adapter's "
+                        + "conditioning images lead the references, in slot order.",
                     modes: []
-                )
+                ).declaring(adapters: KleinAdapters.support(.imageEdit))
             ]
         )
     }
 
     let configuration: Configuration
     private var generator: KleinGenerator?
+    /// Applies each request's adapters to the resident DiT, and restores the base between sets.
+    private var swapper: KleinLoRASwapper?
+    /// The adapter set on the DiT now (sha256 and strength per adapter, in request order).
+    private var appliedAdapters: [String] = []
     /// Encoder-evict mode only: loads the Qwen3-4B conditioner on demand (nil when the encoder is
     /// held resident inside the generator).
     private var encoderProvider: (() async throws -> KleinTextEncoder)?
@@ -116,16 +158,10 @@ public final class Klein4BT2IPackage: ModelPackage {
         case .int4: KleinWeights.quantizeDiT(transformer, bits: 4)
         default: break
         }
-        // Optional LoRA: applied AFTER quantize so the activation-path add rides the QLoRALinear
-        // (int4-safe) — turns this klein into a RefControl/style specialty. Same code path the CLI
-        // `--lora` exercises. loraStrength scales the ΔW contribution.
-        if let loraPath = configuration.loraPath {
-            let url = URL(fileURLWithPath: loraPath)
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                throw KleinPackageError.unreadableSnapshot("LoRA not found: \(loraPath)")
-            }
-            try KleinLoRA.apply(loRAs: [(url, configuration.loraStrength)], to: transformer, dtype: .bfloat16)
-        }
+        // Adapters are per request (contract 1.53.0): the swapper attaches each run's set AFTER
+        // quantize, so the activation-path add rides QLoRALinear on int8/int4.
+        swapper = KleinLoRASwapper(model: transformer, dtype: .bfloat16)
+        appliedAdapters = []
         let vae = try Flux2VAEWeights.loadVAE(directory: snapshot.appendingPathComponent("vae"), dtype: .float32)
         // Edit path: VAE encoder + bn stats (small; enables the imageEdit surface).
         let vaeEncoder = try KleinWeights.loadVAEEncoder(snapshotPath: snapshot.path, dtype: .float32)
@@ -156,8 +192,34 @@ public final class Klein4BT2IPackage: ModelPackage {
 
     public func unload() async {
         generator = nil
+        swapper = nil
+        appliedAdapters = []
         encoderProvider = nil
         MLX.Memory.clearCache()
+    }
+
+    /// Make `adapters` the DiT's active set, when it differs from the one applied. The engine
+    /// resolved and verified them (`resolvedAdapters`); this package checks only what it alone
+    /// knows: the dialect, and that every tensor maps (`KleinLoRA.unknownKeys`).
+    func applyAdapters(_ adapters: [ResolvedAdapter]) throws {
+        guard let swapper else { throw PackageError.notLoaded }
+        for adapter in adapters where !KleinAdapters.formats.contains(adapter.format) {
+            throw PackageError.unsupportedRequestFeature(
+                "adapter \"\(adapter.id)\" is in the \(adapter.format) dialect; klein reads "
+                    + KleinAdapters.formats.map(\.rawValue).joined(separator: ", "))
+        }
+        let wanted = adapters.map { "\($0.source.sha256)@\($0.strength)" }
+        guard wanted != appliedAdapters else { return }
+        do {
+            try swapper.set(adapters.map { ($0.fileURL, Float($0.strength)) })
+        } catch {
+            // set() checks the files before touching the DiT, but a failure part-way leaves an
+            // unknown set: restore the base so the next request starts clean.
+            swapper.detach()
+            appliedAdapters = []
+            throw error
+        }
+        appliedAdapters = wanted
     }
 
     /// Encoder-evict: load the conditioner, encode prompt (+ negative for CFG), force-materialize the
@@ -190,13 +252,18 @@ public final class Klein4BT2IPackage: ModelPackage {
         let prof = MLXProfiler.shared
 
         if let t2i = request as? T2IRequest {
+            if t2i.resolvedAdapters.contains(where: { $0.kind == .referenceConditioned }) {
+                throw PackageError.unsupportedRequestFeature(
+                    "adapters — a reference-conditioned adapter needs the imageEdit surface")
+            }
+            try applyAdapters(t2i.resolvedAdapters)
             let width = ((t2i.width ?? 1024) / 16) * 16
             let height = ((t2i.height ?? 1024) / 16) * 16
             let steps = t2i.steps ?? configuration.defaultSteps
             // Base tier: request guidance overrides the config default (>1 ⇒ two-pass CFG + negative
             // prompt). Distilled config default is 1.0 ⇒ single forward, negative ignored.
             let guidance = Float(t2i.guidanceScale ?? Double(configuration.guidanceScale))
-            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
+            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) adapters=\(t2i.resolvedAdapters.count) \(width)x\(height)")
             let pixels: [UInt8], w: Int, h: Int
             if configuration.evictEncoder {
                 let (pos, neg) = try await encodeAndEvict(
@@ -223,10 +290,13 @@ public final class Klein4BT2IPackage: ModelPackage {
             let width = ((edit.width ?? 1024) / 16) * 16
             let height = ((edit.height ?? 1024) / 16) * 16
             let steps = edit.steps ?? configuration.defaultSteps
+            // An IC adapter's conditioning images lead, in slot order, then the request's own.
+            let conditioning = try KleinAdapters.conditioningImages(edit.resolvedAdapters)
+            try applyAdapters(edit.resolvedAdapters)
             // Decode each conditioning image → [1,3,height,width] in [-1,1] (scaled to target).
-            let refs = try edit.images.map { try Self.decodeReference($0, dim: width) }
+            let refs = try (conditioning + edit.images).map { try Self.decodeReference($0, dim: width) }
             let guidance = Float(edit.guidanceScale ?? Double(configuration.guidanceScale))
-            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
+            prof.beginRun("flux2-klein imageEdit refs=\(refs.count) adapters=\(edit.resolvedAdapters.count) steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
             let pixels: [UInt8], w: Int, h: Int
             if configuration.evictEncoder {
                 let (pos, neg) = try await encodeAndEvict(

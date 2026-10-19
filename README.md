@@ -73,32 +73,51 @@ The core stays engine-free: `Klein` reports into its own `KleinProgress` task-lo
 CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
 or reads `engine.runProgress`.
 
-## LoRA registry (v0.9.0)
+## Adapters (v0.10.0)
 
-`MLXKlein.LoRARegistry` reads the bundled `Resources/klein-lora-registry.json`: 8 curated klein-4B adapters, mirrored
-to `xocialize/*-FLUX.2-klein-4B-lora`. Each entry has a kind (`plain`, or `ic` with ordered, role-typed conditioning
-slots), surface, licence, trigger, prompt template and verification. `LoRAEntry.orderedInputs(bindings:)` turns a
-role → file map into the slot order the edit pipeline expects; the order is load-bearing for RefControl pose and
-try-on. `LoRACache` downloads on first use. `ADDING-CIVITAI-LORAS.md` covers adding one.
+Both packages take **typed adapters per request** (mlx-engine contract 1.53.0, AB-A-0192). A request names adapters by
+catalog id (`T2IRequest` / `IEditRequest.adapters`). The engine resolves them against its catalog, fetches and
+sha256-checks the files, and hands the package `resolvedAdapters`. The package rank-stacks them onto the resident DiT
+(`KleinLoRASwapper`), and changes the stack only when the next request's set differs.
 
-- **CLI only for now.** `klein-cli lora-list`, `lora-info <id>`, and `--lora-id <id> [--slot role=path …]`. The package
-  still takes one adapter at load (`KleinConfiguration.loraPath`). Per-request typed adapters come after the engine's
-  adapter contract (AB-A-0189, AB-A-0192), on a shared image and video registry format (AB-A-0193).
-- **`object-remove` is marked `broken`.** The mirrored file is truncated upstream (AB-T-0217).
-- **Downloads are unpinned** (`resolve/main`, no sha256 check). The shared format pins them.
+| Surface | `AdapterSupport` |
+|---|---|
+| `flux2-klein-4b-t2i`, `-base-t2i` | base `flux2-klein-4b`; formats `bfl-fused`, `diffusers-peft`; kinds `plain`; up to 4; strength 0…2; every quant; per request |
+| `flux2-klein-4b-edit`, `-base-edit` | the same, plus kind `ic` |
 
-**Format 3 (`registry/flux2-klein-4b.json`).** This is the same data in the shared image and video registry format
-(ltx-lora-registry v0.3.0, format 3.1, AB-A-0193), and the source of truth for the runtime adapter catalog (AB-A-0191). Each entry
-decodes as MLXToolKit's `AdapterDescriptor`, pinned to a commit with a hub-confirmed sha256.
+- **IC adapters** (refcontrol-pose, tryon): the conditioning images arrive in slot order and lead the edit's
+  references, followed by the request's own images. One IC adapter per request; an IC adapter on text-to-image is
+  refused.
+- **Every tensor must map.** `KleinLoRA` throws `unknownKeys` for a tensor it can't place, instead of skipping it.
+  `KleinLoRA.unmappedKeys(_:)` runs the same check over a file's header.
+  - The applicator now also adapts the top-level Linears: the in/out embedders, the timestep embedder, the three
+    modulations and the final projection.
+  - fal's four plain adapters target 8 of these, and before v0.10.0 they were silently dropped.
+  - BFL's `final_layer.adaLN_modulation.1` is refused: diffusers' conversion swaps its scale and shift halves, so its
+    delta isn't a rename.
+- **The load-time `KleinConfiguration.loraPath` / `loraStrength` are gone.**
+- **IC footprints** (AB-R-0593): ×1.012 (refcontrol-pose, 2 references) and ×1.013 (tryon, 3) over a no-adapter
+  text-to-image control, at 1024² int8. Klein's peak is the 1024² VAE decode, so references barely move it. Declared
+  as 1.02 each.
+- **Measuring:** `klein-cli --pkg-adapter <registry.json> --adapter <id> --file <safetensors> [--cond role=png …]
+  [--image png …]` drives the package exactly as the engine does and prints floor, peak and activation. Without
+  `--adapter` it is the control arm.
+
+**The registry: `registry/flux2-klein-4b.json`, format 3.1** (ltx-lora-registry v0.3.0, AB-A-0193). This is the source
+of truth for the runtime adapter catalog (AB-A-0191).
+- Each entry decodes as MLXToolKit's `AdapterDescriptor`, pinned to a commit with a hub-confirmed sha256.
 - **Formats** use the engine's constants. fal's `bfl-fused-peft` is `bfl-fused` (the loader strips PEFT's prefix), and
   `diffusers-split` is `diffusers-peft`. The original dialect stays in `verification.headerDialect`.
 - **Clearance:** tryon is `perceptual` (an E2E try-on judged in the CLI); the rest are `mechanical`.
-- **Not ready yet:**
-  - `object-remove` sits in the `withdrawn` array (format 3.1), with its truncated pin, until its mirror is replaced
-    (AB-T-0217);
-  - refcontrol-pose and tryon still need measured IC footprints, and the engine won't register them without one.
-- **Checks:** `python3 -I tools/adapter_registry.py validate [--remote] <this file>`, run from ltx-lora-registry. The
-  bundled v1 file still feeds the CLI until the package reads per-request adapters.
+- **`object-remove`** sits in the `withdrawn` array, with its truncated pin, until its mirror is replaced (AB-T-0217).
+- **Checks:**
+  - `python3 -I tools/adapter_registry.py validate [--remote] <this file>`, run from ltx-lora-registry;
+  - `AdapterTests` runs the ADP-1..4 gate over both manifests and this file;
+  - `LoRAMappingTests` checks every adapter's header (`Tests/KleinTests/Fixtures`) maps completely.
+
+**The legacy v1 bundle** (`Resources/klein-lora-registry.json`, `MLXKlein.LoRARegistry`, `LoRACache`) still feeds the
+CLI's `lora-list`, `lora-info` and `--lora-id` flags, with unpinned downloads. `ADDING-CIVITAI-LORAS.md` covers adding
+an adapter.
 
 ## Weights
 

@@ -24,8 +24,9 @@ let package = Package(
         .package(url: "https://github.com/xocialize/flux2-vae-mlx-swift", from: "0.1.0"),
         .package(url: "https://github.com/xocialize/mlx-profiling.git", from: "0.1.0"),
         // ≥0.32.0 for engine-executed first-run materialization (contract 1.24.0);
-        // the package no longer carries its own WeightMaterializer.
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.32.0"),
+        // the package no longer carries its own WeightMaterializer. ≥0.68.0 for typed adapters
+        // (contract 1.53.0: AdapterSupport, resolvedAdapters).
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.68.0"),
         .package(url: "https://github.com/xocialize/mlx-exact-conv-swift", from: "0.1.0"),
     ],
     targets: [
@@ -68,7 +69,8 @@ let package = Package(
         .testTarget(
             name: "KleinTests",
             dependencies: ["Klein"],
-            path: "Tests/KleinTests"
+            path: "Tests/KleinTests",
+            exclude: ["Fixtures"]   // read by path (#filePath), not bundled
         ),
         .testTarget(
             name: "MLXKleinTests",
