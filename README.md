@@ -88,13 +88,14 @@ try-on. `LoRACache` downloads on first use. `ADDING-CIVITAI-LORAS.md` covers add
 - **Downloads are unpinned** (`resolve/main`, no sha256 check). The shared format pins them.
 
 **Format 3 (`registry/flux2-klein-4b.json`).** This is the same data in the shared image and video registry format
-(ltx-lora-registry v0.2.0, AB-A-0193), and the source of truth for the runtime adapter catalog (AB-A-0191). Each entry
+(ltx-lora-registry v0.3.0, format 3.1, AB-A-0193), and the source of truth for the runtime adapter catalog (AB-A-0191). Each entry
 decodes as MLXToolKit's `AdapterDescriptor`, pinned to a commit with a hub-confirmed sha256.
 - **Formats** use the engine's constants. fal's `bfl-fused-peft` is `bfl-fused` (the loader strips PEFT's prefix), and
   `diffusers-split` is `diffusers-peft`. The original dialect stays in `verification.headerDialect`.
 - **Clearance:** tryon is `perceptual` (an E2E try-on judged in the CLI); the rest are `mechanical`.
 - **Not ready yet:**
-  - `object-remove` is withheld until its mirror is replaced (AB-T-0217);
+  - `object-remove` sits in the `withdrawn` array (format 3.1), with its truncated pin, until its mirror is replaced
+    (AB-T-0217);
   - refcontrol-pose and tryon still need measured IC footprints, and the engine won't register them without one.
 - **Checks:** `python3 -I tools/adapter_registry.py validate [--remote] <this file>`, run from ltx-lora-registry. The
   bundled v1 file still feeds the CLI until the package reads per-request adapters.

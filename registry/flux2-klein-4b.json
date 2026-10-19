@@ -425,5 +425,25 @@
       }
     }
   ],
-  "description": "FLUX.2 [klein] 4B adapters, mirrored to xocialize/*-FLUX.2-klein-4B-lora. Source of truth for the runtime adapter catalog (AB-A-0191); converted from the v1 bundle by ltx-lora-registry v0.2.0's tool (AB-A-0193). object-remove is withheld until its truncated mirror is replaced (AB-T-0217)."
+  "description": "FLUX.2 [klein] 4B adapters, mirrored to xocialize/*-FLUX.2-klein-4B-lora. Source of truth for the runtime adapter catalog (AB-A-0191); converted from the v1 bundle by ltx-lora-registry v0.2.0's tool (AB-A-0193). object-remove is withdrawn until its truncated mirror is replaced (AB-T-0217).",
+  "withdrawn": [
+    {
+      "id": "object-remove",
+      "title": "Object Removal",
+      "reason": "The pinned file is truncated upstream: its header needs 76,039,072 bytes, the file has 58,441,728 (30 of 136 tensors past EOF). mlx-swift 0.31 loads it silently, 0.32 refuses it. Reinstate with fal's complete comfy-converted file (76,038,936 bytes, sha256 dc197de6…88ec) once it is re-mirrored and re-pinned.",
+      "date": "2026-10-19",
+      "tracking": "AB-T-0217",
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/object-remove-FLUX.2-klein-4B-lora",
+        "revision": "342dddc056a973197335cda95e3aad090d1581d2",
+        "file": "flux-object-remove-lora.safetensors",
+        "sha256": "70ceea34a8bcd6e7d0249ba26bb59a3cd8b8c38745fab65a3eb112a5c13e3c69",
+        "bytes": 58441728,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora"
+      }
+    }
+  ]
 }
