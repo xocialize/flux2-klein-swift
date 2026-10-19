@@ -101,7 +101,11 @@ public enum KleinLoRA {
     /// unrecognized (top-level embedders, unknown submodules) so the loader skips, never crashes.
     static func expand(base: String) -> [(path: String, third: Int?)] {
         var s = base
-        for p in ["diffusion_model.", "transformer."] where s.hasPrefix(p) {
+        // Strip known container prefixes, outermost first: PEFT's `base_model.model.` (as emitted
+        // by diffusers/peft LoRA exports, e.g. fal's), then the BFL `diffusion_model.` /
+        // diffusers `transformer.` roots. A nested `base_model.model.diffusion_model.…` collapses
+        // in one pass because the list is ordered outer→inner.
+        for p in ["base_model.model.", "diffusion_model.", "transformer."] where s.hasPrefix(p) {
             s.removeFirst(p.count)
         }
         let comps = s.split(separator: ".").map(String.init)

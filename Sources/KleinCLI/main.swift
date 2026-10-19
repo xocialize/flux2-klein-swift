@@ -76,6 +76,49 @@ struct KleinCLI {
             print("[nax-probe] \(ok ? "PASS — kernel fixed, row-chunk removable" : "FAIL — keep the row-chunk")")
             exit(ok ? 0 : 1)
         }
+
+        // Repeated option: collects every `--slot role=path` (or any repeated flag) in order.
+        func opts(_ n: String) -> [String] {
+            var vals: [String] = []
+            while let i = args.firstIndex(of: n), i + 1 < args.count {
+                vals.append(args[i + 1]); args.removeSubrange(i...(i + 1))
+            }
+            return vals
+        }
+        // lora-list: print the bundled Klein LoRA registry (id, surface, kind, trigger, slots).
+        if args.first == "lora-list" {
+            let reg = try LoRARegistry.bundled()
+            print("[lora-list] schema v\(reg.schemaVersion) base=\(reg.base) — \(reg.adapters.count) adapter(s)")
+            for e in reg.adapters {
+                let slots = e.slots.map { "\($0.slot):\($0.role)\($0.required ? "" : "?")" }.joined(separator: " ")
+                let trig = e.trigger.count > 40 ? String(e.trigger.prefix(37)) + "…" : e.trigger
+                print("  • \(e.id)  [\(e.surface)/\(e.kind)]  trigger=\(trig)  strength=\(e.defaultStrength)"
+                    + (slots.isEmpty ? "" : "  slots=[\(slots)]"))
+            }
+            return
+        }
+        // lora-info <id>: full detail for one adapter incl. required conditioning slots.
+        if args.first == "lora-info", args.count >= 2 {
+            let reg = try LoRARegistry.bundled()
+            guard let e = reg.entry(id: args[1]) else { throw LoRARegistryError.unknownAdapter(args[1]) }
+            print("[lora-info] \(e.id) — \(e.displayName)")
+            print("  repo=\(e.repo)/\(e.weightFile)")
+            print("  surface=\(e.surface) kind=\(e.kind) trigger=\(e.trigger) defaultStrength=\(e.defaultStrength)")
+            if let s = e.status { print("  status=\(s) license=\(e.license ?? "?") gated=\(e.gatedDownload ?? false)") }
+            if let src = e.source { print("  source=\(src)") }
+            if let t = e.promptTemplate { print("  promptTemplate=\"\(t)\"") }
+            for s in e.slots {
+                print("  slot \(s.slot): \(s.role)\(s.required ? " (required)" : " (optional)") "
+                    + "media=\(s.media) ingest=\(s.ingest ?? "-")" + (s.note.map { " — \($0)" } ?? ""))
+            }
+            if let v = e.verification {
+                print("  verify: dialect=\(v.headerDialect ?? "?") rank=\(v.rank.map(String.init) ?? "?") "
+                    + "tensors=\(v.tensors.map(String.init) ?? "?") "
+                    + "targets=\(v.doubleTargets.map(String.init) ?? "?")d+\(v.singleTargets.map(String.init) ?? "?")s "
+                    + "gate=\(v.gate ?? "?")")
+            }
+            return
+        }
         // lora-smoke <lora.safetensors>: STRUCTURAL smoke — build a Flux2Transformer at config
         // dims (random init, no weights), apply the LoRA, print how many Linears were adapted per
         // block array. No inference / no Metal compute.
@@ -153,9 +196,49 @@ struct KleinCLI {
         let size = Int(opt("--size") ?? "1024")!
         let steps = Int(opt("--steps") ?? "4")!
         let seed = UInt64(opt("--seed") ?? "42")!
-        let prompt = opt("--prompt")
-            ?? "A lighthouse on a stormy coast at dusk, dramatic clouds, crashing waves, warm lamp glow, photorealistic"
+        let promptFlag = opt("--prompt")
         let out = opt("--out") ?? "klein_\(size)_s\(seed).png"
+
+        // --lora-id <id> [--slot role=path ...] [--lora-cache <dir>]: registry-driven LoRA.
+        // The entry is self-describing — one path serves every adapter: resolve → cache.ensure →
+        // (for `ic`) bind role→file slots in the manifest's declared (load-bearing) order → feed
+        // the edit pipeline. Adding a LoRA is a JSON entry, never new CLI code.
+        var registryLoRAPath: String? = nil
+        var registryEditRefs: String? = nil
+        var registryPrompt: String? = nil
+        var registryStrength: Float? = nil
+        if let loraId = opt("--lora-id") {
+            let reg = try LoRARegistry.bundled()
+            guard let entry = reg.entry(id: loraId) else { throw LoRARegistryError.unknownAdapter(loraId) }
+            let cacheDir = opt("--lora-cache").map { URL(fileURLWithPath: $0) }
+                ?? FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Development/MLXModelStore/loras")
+            let cache = LoRACache(directory: cacheDir)
+            let url = try await cache.ensure(entry)
+            registryLoRAPath = url.path
+            registryStrength = entry.defaultStrength
+            registryPrompt = entry.promptTemplate
+            print("[cli] registry LoRA '\(entry.id)' [\(entry.surface)/\(entry.kind)] → \(url.lastPathComponent)")
+            if entry.isReferenceConditioned {
+                // Parse `--slot role=path` pairs, then order them by the manifest's slots.
+                var bindings: [String: URL] = [:]
+                for pair in opts("--slot") {
+                    guard let eq = pair.firstIndex(of: "=") else {
+                        throw LoRARegistryError.unknownSlot(pair, adapter: entry.id)
+                    }
+                    let role = String(pair[..<eq])
+                    let path = String(pair[pair.index(after: eq)...])
+                    bindings[role] = URL(fileURLWithPath: path)
+                }
+                let ordered = try entry.orderedInputs(bindings: bindings)
+                registryEditRefs = ordered.map(\.path).joined(separator: ",")
+                let roles = entry.slots.compactMap { bindings[$0.role] != nil ? $0.role : nil }
+                print("[cli] slots (in order): \(roles.joined(separator: " → "))")
+            }
+        }
+
+        let prompt = promptFlag ?? registryPrompt
+            ?? "A lighthouse on a stormy coast at dusk, dramatic clouds, crashing waves, warm lamp glow, photorealistic"
 
         func timed<T>(_ label: String, _ body: () throws -> T) rethrows -> T {
             let t0 = Date(); let r = try body()
@@ -163,7 +246,8 @@ struct KleinCLI {
         }
 
         // --edit <ref.png>: compositional multi-reference edit (comma-separate for multiple refs).
-        let editRefs = opt("--edit")
+        // A registry `ic` LoRA supplies its slot-ordered refs here when --edit is not given directly.
+        let editRefs = opt("--edit") ?? registryEditRefs
         let quantBits = Int(opt("--quant") ?? "0")!
         // Base tier: --guidance >1 enables two-pass CFG; --negative sets the negative prompt.
         let guidance = Float(opt("--guidance") ?? "1.0")!
@@ -177,8 +261,8 @@ struct KleinCLI {
         // --lora <path> [--lora-strength <s>]: apply a RefControl (or any) LoRA over the
         // (optionally int4) base — validates the runtime activation-path applicator incl. the
         // QLoRALinear path. For RefControl: --edit <control.png>,<reference.png>.
-        if let loraPath = opt("--lora") {
-            let strength = Float(opt("--lora-strength") ?? "1.0")!
+        if let loraPath = opt("--lora") ?? registryLoRAPath {
+            let strength = opt("--lora-strength").flatMap(Float.init) ?? registryStrength ?? 1.0
             let summary = try timed("apply LoRA") {
                 try KleinLoRA.apply(loRA: URL(fileURLWithPath: loraPath), to: transformer,
                                     dtype: .bfloat16, strength: strength)

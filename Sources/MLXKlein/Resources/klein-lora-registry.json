@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "base": "FLUX.2-klein-4B",
+  "adapters": [
+    {
+      "id": "refcontrol-pose",
+      "displayName": "RefControl Pose",
+      "repo": "xocialize/refcontrol-FLUX.2-klein-4B-pose-lora",
+      "weightFile": "refcontrol-pose-klein-4b.safetensors",
+      "trigger": "refcontrol",
+      "defaultStrength": 1.0,
+      "kind": "ic",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "promptTemplate": "apply pose from image 1 with reference from image 2",
+      "conditioning": [
+        {
+          "slot": 1,
+          "role": "pose",
+          "media": "image",
+          "required": true,
+          "ingest": "openpose-skeleton",
+          "note": "OpenPose-style skeleton = target pose. Order is load-bearing."
+        },
+        {
+          "slot": 2,
+          "role": "reference",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Subject reference image. Order is load-bearing."
+        }
+      ],
+      "verification": {
+        "headerDialect": "bfl-fused",
+        "rank": 32,
+        "alpha": 32,
+        "tensors": 160,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": ["bf16", "int4"],
+        "checkpoint": "v2-step3500",
+        "gate": "applicator-validated"
+      }
+    },
+    {
+      "id": "consistence-edit",
+      "displayName": "Consistence Edit",
+      "repo": "xocialize/consistence-edit-FLUX.2-klein-4B-lora",
+      "weightFile": "f2k_4B_consist_20260314.safetensors",
+      "trigger": "transform the image to realistic photograph. add realistic details to the corrupted image. restore high frequence details from the corrupted image.",
+      "defaultStrength": 0.6,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://civitai.com/models/1939453?modelVersionId=2771678",
+      "promptTemplate": "transform the image to realistic photograph. add realistic details to the corrupted image. restore high frequence details from the corrupted image.",
+      "verification": {
+        "headerDialect": "diffusers-split",
+        "rank": 128,
+        "tensors": 200,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": ["bf16"],
+        "checkpoint": "20260314",
+        "gate": "applicator-smoke-100-targets"
+      }
+    },
+    {
+      "id": "object-remove",
+      "displayName": "Object Removal",
+      "repo": "xocialize/object-remove-FLUX.2-klein-4B-lora",
+      "weightFile": "flux-object-remove-lora.safetensors",
+      "trigger": "Remove the highlighted object from the scene",
+      "defaultStrength": 1.1,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "broken",
+      "statusNote": "The mirrored file is truncated upstream: 30 of 136 tensors lie past EOF. mlx-swift 0.31 loads it silently, 0.32 refuses it. Re-mirror fal's complete comfy-converted file (AB-T-0217).",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora",
+      "promptTemplate": "Remove the highlighted object from the scene",
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": ["f32"],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "background-remove",
+      "displayName": "Background Removal",
+      "repo": "xocialize/background-remove-FLUX.2-klein-4B-lora",
+      "weightFile": "flux-background-remove-lora.safetensors",
+      "trigger": "Remove the background from the image",
+      "defaultStrength": 1.1,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://huggingface.co/fal/flux-2-klein-4B-background-remove-lora",
+      "promptTemplate": "Remove the background from the image",
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": ["f32"],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "outpaint",
+      "displayName": "Outpaint (Green Screen)",
+      "repo": "xocialize/outpaint-FLUX.2-klein-4B-lora",
+      "weightFile": "flux-outpaint-lora.safetensors",
+      "trigger": "Fill the green spaces according to the image",
+      "defaultStrength": 1.1,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora",
+      "promptTemplate": "Fill the green spaces according to the image",
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": ["f32"],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "spritesheet",
+      "displayName": "2x2 Sprite Sheet",
+      "repo": "xocialize/spritesheet-FLUX.2-klein-4B-lora",
+      "weightFile": "flux-spritesheet-lora.safetensors",
+      "trigger": "2x2 sprite sheet",
+      "defaultStrength": 1.1,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://huggingface.co/fal/flux-2-klein-4b-spritesheet-lora",
+      "promptTemplate": "2x2 sprite sheet",
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": ["f32"],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "zoom",
+      "displayName": "Red Zoom",
+      "repo": "xocialize/zoom-FLUX.2-klein-4B-lora",
+      "weightFile": "flux-red-zoom-lora.safetensors",
+      "trigger": "Zoom into the red highlighted area",
+      "defaultStrength": 1.1,
+      "kind": "plain",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora",
+      "promptTemplate": "Zoom into the red highlighted area",
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": ["f32"],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "tryon",
+      "displayName": "Virtual Try-On",
+      "repo": "xocialize/tryon-FLUX.2-klein-4B-lora",
+      "weightFile": "tryon-klein-4b.safetensors",
+      "trigger": "TRYON",
+      "defaultStrength": 1.0,
+      "kind": "ic",
+      "surface": "imageEdit",
+      "status": "verified",
+      "license": "apache-2.0",
+      "gatedDownload": false,
+      "source": "self-trained (ai-toolkit on FLUX.2-klein-base-4B, step 2000; Pexels train-only corpus)",
+      "promptTemplate": "TRYON a full-body photo of a person. Replace the outfit with the top and bottom as shown in the reference images. The final image is a full body shot.",
+      "conditioning": [
+        {
+          "slot": 1,
+          "role": "person",
+          "media": "image",
+          "required": true,
+          "ingest": "clothing-agnostic",
+          "note": "Full-body person with the outfit region masked/greyed (agnostic). Order is load-bearing."
+        },
+        {
+          "slot": 2,
+          "role": "top",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Isolated top garment. Order is load-bearing."
+        },
+        {
+          "slot": 3,
+          "role": "bottom",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Isolated bottom garment (or the dress, in both top+bottom slots). Order is load-bearing."
+        }
+      ],
+      "verification": {
+        "headerDialect": "bfl-fused",
+        "rank": 32,
+        "tensors": 160,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": ["bf16", "int4"],
+        "checkpoint": "step2000",
+        "gate": "applicator-validated-100-targets + E2E try-on + outfit-swap"
+      }
+    }
+  ]
+}

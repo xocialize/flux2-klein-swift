@@ -54,7 +54,8 @@ let package = Package(
                 .product(name: "MLXProfiling", package: "mlx-profiling"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
-            path: "Sources/MLXKlein"
+            path: "Sources/MLXKlein",
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "klein-cli",

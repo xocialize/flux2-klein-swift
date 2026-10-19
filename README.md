@@ -73,6 +73,20 @@ The core stays engine-free: `Klein` reports into its own `KleinProgress` task-lo
 CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
 or reads `engine.runProgress`.
 
+## LoRA registry (v0.9.0)
+
+`MLXKlein.LoRARegistry` reads the bundled `Resources/klein-lora-registry.json`: 8 curated klein-4B adapters, mirrored
+to `xocialize/*-FLUX.2-klein-4B-lora`. Each entry has a kind (`plain`, or `ic` with ordered, role-typed conditioning
+slots), surface, licence, trigger, prompt template and verification. `LoRAEntry.orderedInputs(bindings:)` turns a
+role → file map into the slot order the edit pipeline expects; the order is load-bearing for RefControl pose and
+try-on. `LoRACache` downloads on first use. `ADDING-CIVITAI-LORAS.md` covers adding one.
+
+- **CLI only for now.** `klein-cli lora-list`, `lora-info <id>`, and `--lora-id <id> [--slot role=path …]`. The package
+  still takes one adapter at load (`KleinConfiguration.loraPath`). Per-request typed adapters come after the engine's
+  adapter contract (AB-A-0189, AB-A-0192), on a shared image and video registry format (AB-A-0193).
+- **`object-remove` is marked `broken`.** The mirrored file is truncated upstream (AB-T-0217).
+- **Downloads are unpinned** (`resolve/main`, no sha256 check). The shared format pins them.
+
 ## Weights
 
 bf16 snapshot on Hugging Face (Apache-2.0), materialized by the engine (`WeightSourcing`) or via
