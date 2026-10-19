@@ -1,0 +1,429 @@
+{
+  "format": "adapter-registry",
+  "schemaVersion": 3,
+  "namespace": "flux2-klein",
+  "title": "FLUX.2 Klein adapters",
+  "adapters": [
+    {
+      "id": "refcontrol-pose",
+      "title": "RefControl Pose",
+      "kind": "ic",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/refcontrol-FLUX.2-klein-4B-pose-lora",
+        "revision": "b2b0edf2622f2abd980bf868441149d71b3eb7b0",
+        "file": "refcontrol-pose-klein-4b.safetensors",
+        "sha256": "f9880f9070576ff1603c0988ed2afc9957deb0d7dd7c52cf15decbd4087f1339",
+        "bytes": 92426792,
+        "gated": false,
+        "hashFrom": "hub"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "notice": "Self-trained by xocialize on black-forest-labs/FLUX.2-klein-base-4B (Apache-2.0). Training frames came from Wikimedia Commons contributors (CC-BY / CC-BY-SA) and Pexels videographers; they are not redistributed, only the weights.",
+        "url": "https://huggingface.co/xocialize/refcontrol-FLUX.2-klein-4B-pose-lora/blob/b2b0edf2622f2abd980bf868441149d71b3eb7b0/README.md"
+      },
+      "defaultStrength": 1.0,
+      "conditioning": [
+        {
+          "role": "pose",
+          "media": "image",
+          "required": true,
+          "ingest": "openpose-skeleton",
+          "note": "OpenPose-style skeleton = target pose. Order is load-bearing."
+        },
+        {
+          "role": "reference",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Subject reference image. Order is load-bearing."
+        }
+      ],
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "refcontrol",
+      "promptTemplate": "apply pose from image 1 with reference from image 2",
+      "weights": {
+        "rank": 32,
+        "alpha": 32
+      },
+      "verification": {
+        "headerDialect": "bfl-fused",
+        "rank": 32,
+        "alpha": 32,
+        "tensors": 160,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": [
+          "bf16",
+          "int4"
+        ],
+        "checkpoint": "v2-step3500",
+        "gate": "applicator-validated"
+      }
+    },
+    {
+      "id": "consistence-edit",
+      "title": "Consistence Edit",
+      "kind": "plain",
+      "format": "diffusers-peft",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/consistence-edit-FLUX.2-klein-4B-lora",
+        "revision": "f043b846a356529a6b0c269945f0888522064490",
+        "file": "f2k_4B_consist_20260314.safetensors",
+        "sha256": "bed1e7e8747bc4572a20a7fcef436e82cfbfa5430d0162eda713b55d7a3c7ce4",
+        "bytes": 385379872,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://civitai.com/models/1939453?modelVersionId=2771678"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "url": "https://huggingface.co/xocialize/consistence-edit-FLUX.2-klein-4B-lora/blob/f043b846a356529a6b0c269945f0888522064490/LICENSE",
+        "notice": "Keep this repo's NOTICE file (the original author's attribution) with any redistributed copy: https://huggingface.co/xocialize/consistence-edit-FLUX.2-klein-4B-lora/blob/f043b846a356529a6b0c269945f0888522064490/NOTICE"
+      },
+      "defaultStrength": 0.6,
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "transform the image to realistic photograph. add realistic details to the corrupted image. restore high frequence details from the corrupted image.",
+      "promptTemplate": "transform the image to realistic photograph. add realistic details to the corrupted image. restore high frequence details from the corrupted image.",
+      "weights": {
+        "rank": 128
+      },
+      "verification": {
+        "headerDialect": "diffusers-split",
+        "rank": 128,
+        "tensors": 200,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": [
+          "bf16"
+        ],
+        "checkpoint": "20260314",
+        "gate": "applicator-smoke-100-targets"
+      }
+    },
+    {
+      "id": "background-remove",
+      "title": "Background Removal",
+      "kind": "plain",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/background-remove-FLUX.2-klein-4B-lora",
+        "revision": "10f38b4af9de00f1a3b177e44d0aaec30d842af6",
+        "file": "flux-background-remove-lora.safetensors",
+        "sha256": "79d8cd4a5ea67c196b173aeb7c751bcfffc79823993b2a033107d4a8db68bcea",
+        "bytes": 76039072,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://huggingface.co/fal/flux-2-klein-4B-background-remove-lora"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "url": "https://huggingface.co/xocialize/background-remove-FLUX.2-klein-4B-lora/blob/10f38b4af9de00f1a3b177e44d0aaec30d842af6/LICENSE",
+        "notice": "Keep this repo's NOTICE file (the original author's attribution) with any redistributed copy: https://huggingface.co/xocialize/background-remove-FLUX.2-klein-4B-lora/blob/10f38b4af9de00f1a3b177e44d0aaec30d842af6/NOTICE"
+      },
+      "defaultStrength": 1.1,
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "Remove the background from the image",
+      "promptTemplate": "Remove the background from the image",
+      "weights": {
+        "rank": 16
+      },
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": [
+          "f32"
+        ],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "outpaint",
+      "title": "Outpaint (Green Screen)",
+      "kind": "plain",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/outpaint-FLUX.2-klein-4B-lora",
+        "revision": "dafbfeeed5db940fd74cd9c0fb6981560e77d343",
+        "file": "flux-outpaint-lora.safetensors",
+        "sha256": "9623927f2471613e0c9d7810da3c39f0b277a448193b223ea3cee67d5750974a",
+        "bytes": 76039072,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "url": "https://huggingface.co/xocialize/outpaint-FLUX.2-klein-4B-lora/blob/dafbfeeed5db940fd74cd9c0fb6981560e77d343/LICENSE",
+        "notice": "Keep this repo's NOTICE file (the original author's attribution) with any redistributed copy: https://huggingface.co/xocialize/outpaint-FLUX.2-klein-4B-lora/blob/dafbfeeed5db940fd74cd9c0fb6981560e77d343/NOTICE"
+      },
+      "defaultStrength": 1.1,
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "Fill the green spaces according to the image",
+      "promptTemplate": "Fill the green spaces according to the image",
+      "weights": {
+        "rank": 16
+      },
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": [
+          "f32"
+        ],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "spritesheet",
+      "title": "2x2 Sprite Sheet",
+      "kind": "plain",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/spritesheet-FLUX.2-klein-4B-lora",
+        "revision": "9d68d65506dce961fef1473e1edd11def3ff9f96",
+        "file": "flux-spritesheet-lora.safetensors",
+        "sha256": "8aff1fc288755bfc99d91c9d31313062a0d5a0e2935afc3b87edcc431a45da5a",
+        "bytes": 76039072,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://huggingface.co/fal/flux-2-klein-4b-spritesheet-lora"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "url": "https://huggingface.co/xocialize/spritesheet-FLUX.2-klein-4B-lora/blob/9d68d65506dce961fef1473e1edd11def3ff9f96/LICENSE",
+        "notice": "Keep this repo's NOTICE file (the original author's attribution) with any redistributed copy: https://huggingface.co/xocialize/spritesheet-FLUX.2-klein-4B-lora/blob/9d68d65506dce961fef1473e1edd11def3ff9f96/NOTICE"
+      },
+      "defaultStrength": 1.1,
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "2x2 sprite sheet",
+      "promptTemplate": "2x2 sprite sheet",
+      "weights": {
+        "rank": 16
+      },
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": [
+          "f32"
+        ],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "zoom",
+      "title": "Red Zoom",
+      "kind": "plain",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/zoom-FLUX.2-klein-4B-lora",
+        "revision": "ec25220671322176b8e6bc13d2bd6ab09bde43ea",
+        "file": "flux-red-zoom-lora.safetensors",
+        "sha256": "a435808332f495450f203786a45c337163e2d6e8253043035b1202cc7a4f915b",
+        "bytes": 76039072,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "url": "https://huggingface.co/xocialize/zoom-FLUX.2-klein-4B-lora/blob/ec25220671322176b8e6bc13d2bd6ab09bde43ea/LICENSE",
+        "notice": "Keep this repo's NOTICE file (the original author's attribution) with any redistributed copy: https://huggingface.co/xocialize/zoom-FLUX.2-klein-4B-lora/blob/ec25220671322176b8e6bc13d2bd6ab09bde43ea/NOTICE"
+      },
+      "defaultStrength": 1.1,
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "mechanical"
+        }
+      },
+      "trigger": "Zoom into the red highlighted area",
+      "promptTemplate": "Zoom into the red highlighted area",
+      "weights": {
+        "rank": 16
+      },
+      "verification": {
+        "headerDialect": "bfl-fused-peft",
+        "rank": 16,
+        "tensors": 136,
+        "doubleTargets": 40,
+        "singleTargets": 40,
+        "dtypes": [
+          "f32"
+        ],
+        "checkpoint": "fal-2026-01",
+        "gate": "applicator-validated-80-targets"
+      }
+    },
+    {
+      "id": "tryon",
+      "title": "Virtual Try-On",
+      "kind": "ic",
+      "format": "bfl-fused",
+      "baseModels": [
+        "flux2-klein-4b"
+      ],
+      "capabilities": [
+        "imageEdit"
+      ],
+      "source": {
+        "host": "huggingface",
+        "repo": "xocialize/tryon-FLUX.2-klein-4B-lora",
+        "revision": "5e590220c687190a3d8dc66d173570f9de097984",
+        "file": "tryon-klein-4b.safetensors",
+        "sha256": "e251c836b4792910cb322317f58a91063f73bef7255031912886af840dc7dd43",
+        "bytes": 92426760,
+        "gated": false,
+        "hashFrom": "hub",
+        "upstream": "self-trained (ai-toolkit on FLUX.2-klein-base-4B, step 2000; Pexels train-only corpus)"
+      },
+      "license": "Apache-2.0",
+      "licenseTerms": {
+        "commercialUse": "allowed",
+        "gated": false,
+        "notice": "Self-trained by xocialize on black-forest-labs/FLUX.2-klein-base-4B (Apache-2.0). Training frames came from Pexels (train-only); they are not redistributed, only the weights.",
+        "url": "https://huggingface.co/xocialize/tryon-FLUX.2-klein-4B-lora/blob/5e590220c687190a3d8dc66d173570f9de097984/README.md"
+      },
+      "defaultStrength": 1.0,
+      "conditioning": [
+        {
+          "role": "person",
+          "media": "image",
+          "required": true,
+          "ingest": "clothing-agnostic",
+          "note": "Full-body person with the outfit region masked/greyed (agnostic). Order is load-bearing."
+        },
+        {
+          "role": "top",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Isolated top garment. Order is load-bearing."
+        },
+        {
+          "role": "bottom",
+          "media": "image",
+          "required": true,
+          "ingest": "raw",
+          "note": "Isolated bottom garment (or the dress, in both top+bottom slots). Order is load-bearing."
+        }
+      ],
+      "status": "verified",
+      "clearance": {
+        "flux2-klein-4b": {
+          "level": "perceptual"
+        }
+      },
+      "trigger": "TRYON",
+      "promptTemplate": "TRYON a full-body photo of a person. Replace the outfit with the top and bottom as shown in the reference images. The final image is a full body shot.",
+      "weights": {
+        "rank": 32
+      },
+      "verification": {
+        "headerDialect": "bfl-fused",
+        "rank": 32,
+        "tensors": 160,
+        "doubleTargets": 60,
+        "singleTargets": 40,
+        "dtypes": [
+          "bf16",
+          "int4"
+        ],
+        "checkpoint": "step2000",
+        "gate": "applicator-validated-100-targets + E2E try-on + outfit-swap"
+      }
+    }
+  ],
+  "description": "FLUX.2 [klein] 4B adapters, mirrored to xocialize/*-FLUX.2-klein-4B-lora. Source of truth for the runtime adapter catalog (AB-A-0191); converted from the v1 bundle by ltx-lora-registry v0.2.0's tool (AB-A-0193). object-remove is withheld until its truncated mirror is replaced (AB-T-0217)."
+}
