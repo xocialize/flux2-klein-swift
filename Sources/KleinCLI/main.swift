@@ -343,20 +343,10 @@ struct KleinCLI {
         print("[cli] prompt embeds: \(embeds.shape)")
 
         func loadRefImage(_ path: String, _ dim: Int) -> MLXArray {
-            let cs = CGColorSpace(name: CGColorSpace.sRGB)!
             let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)!
             let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)!
-            var buf = [UInt8](repeating: 0, count: dim * dim * 4)
-            let ctx = CGContext(data: &buf, width: dim, height: dim, bitsPerComponent: 8,
-                bytesPerRow: dim * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dim, height: dim))   // scales to dim×dim
-            var rgb = [Float](repeating: 0, count: 3 * dim * dim)
-            for p in 0..<(dim * dim) {
-                rgb[p] = Float(buf[p*4]) / 127.5 - 1               // R plane
-                rgb[dim*dim + p] = Float(buf[p*4+1]) / 127.5 - 1   // G plane
-                rgb[2*dim*dim + p] = Float(buf[p*4+2]) / 127.5 - 1 // B plane
-            }
-            return MLXArray(rgb, [1, 3, dim, dim])
+            // Aspect kept, area ≤ min(1024², output area), sides /16 (AB-A-0213).
+            return KleinReference.pixels(cg, maxArea: KleinReference.maxArea(outputWidth: dim, outputHeight: dim))
         }
 
         let t0 = Date()

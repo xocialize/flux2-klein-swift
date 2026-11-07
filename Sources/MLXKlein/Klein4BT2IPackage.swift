@@ -307,8 +307,10 @@ public final class Klein4BT2IPackage: ModelPackage {
             // An IC adapter's conditioning images lead, in slot order, then the request's own.
             let conditioning = try KleinAdapters.conditioningImages(edit.resolvedAdapters)
             try applyAdapters(edit.resolvedAdapters)
-            // Decode each conditioning image → [1,3,height,width] in [-1,1] (scaled to target).
-            let refs = try (conditioning + edit.images).map { try Self.decodeReference($0, dim: width) }
+            // Decode each conditioning image → [1,3,h,w] in [-1,1] with its own aspect, area ≤
+            // min(1024², output area), sides /16 (KleinReference; AB-A-0213).
+            let maxArea = KleinReference.maxArea(outputWidth: width, outputHeight: height)
+            let refs = try (conditioning + edit.images).map { try Self.decodeReference($0, maxArea: maxArea) }
             let guidance = Float(edit.guidanceScale ?? Double(configuration.guidanceScale))
             prof.beginRun("flux2-klein imageEdit refs=\(refs.count) adapters=\(edit.resolvedAdapters.count) steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
             let pixels: [UInt8], w: Int, h: Int
@@ -337,23 +339,12 @@ public final class Klein4BT2IPackage: ModelPackage {
         throw PackageError.unsupportedCapability(request.capability)
     }
 
-    /// Decode a conditioning `Image` (PNG/etc.) → [1,3,dim,dim] in [-1,1], scaled to dim×dim.
-    nonisolated static func decodeReference(_ image: Image, dim: Int) throws -> MLXArray {
+    /// Decode a conditioning `Image` (PNG/etc.) → [1,3,h,w] in [-1,1], aspect kept (`KleinReference`).
+    nonisolated static func decodeReference(_ image: Image, maxArea: Int) throws -> MLXArray {
         guard let src = CGImageSourceCreateWithData(image.data as CFData, nil),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)
         else { throw KleinPackageError.pngEncode }
-        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
-        var buf = [UInt8](repeating: 0, count: dim * dim * 4)
-        let ctx = CGContext(data: &buf, width: dim, height: dim, bitsPerComponent: 8,
-            bytesPerRow: dim * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dim, height: dim))
-        var rgb = [Float](repeating: 0, count: 3 * dim * dim)
-        for p in 0..<(dim * dim) {
-            rgb[p] = Float(buf[p*4]) / 127.5 - 1
-            rgb[dim*dim + p] = Float(buf[p*4+1]) / 127.5 - 1
-            rgb[2*dim*dim + p] = Float(buf[p*4+2]) / 127.5 - 1
-        }
-        return MLXArray(rgb, [1, 3, dim, dim])
+        return KleinReference.pixels(cg, maxArea: maxArea)
     }
 
     nonisolated static func encodePNG(pixels: [UInt8], width: Int, height: Int) throws -> Data {

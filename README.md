@@ -117,6 +117,23 @@ of truth for the runtime adapter catalog (AB-A-0191).
   - `AdapterTests` runs the ADP-1..4 gate over both manifests and this file;
   - `LoRAMappingTests` checks every adapter's header (`Tests/KleinTests/Fixtures`) maps completely.
 
+## Edit references keep their aspect (v0.10.2, AB-A-0213)
+
+Up to 0.10.1, every edit reference (the request's images and IC conditioning images alike) was drawn into an
+output-width × output-width square, so a non-square reference was stretched. `KleinReference` now follows diffusers'
+`Flux2KleinPipeline`:
+- the aspect is kept;
+- a reference over the area cap is scaled down to it;
+- each side is floored to a multiple of 16, with a center crop of under 16 px;
+- a reference is never upscaled.
+
+The cap is **min(1024², output area)**. For outputs of 1024² or larger that is exactly diffusers' rule. For smaller
+outputs, a reference never carries more tokens than the output does, so the measured footprints still hold.
+- **Measured** (M5 Max, bf16, 1024² output, a 1024×683 reference, 4 steps, same seed): 0.10.1 vs 0.10.2 peaks are
+  24,418 vs 24,413 MB MLX and 41.79 vs 41.74 GB process footprint (uncapped cache).
+- **The difference you can see:** 0.10.1 draws the subject stretched tall and thin; 0.10.2 keeps its proportions.
+- **The CLI:** `klein-cli --edit` uses the same rule.
+
 **The legacy v1 bundle** (`Resources/klein-lora-registry.json`, `MLXKlein.LoRARegistry`, `LoRACache`) still feeds the
 CLI's `lora-list`, `lora-info` and `--lora-id` flags, with unpinned downloads. `ADDING-CIVITAI-LORAS.md` covers adding
 an adapter.

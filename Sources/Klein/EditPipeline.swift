@@ -11,8 +11,8 @@ import MLXRandom
 
 public enum KleinEditPipeline {
 
-    /// Reference conditioning for one image [1,3,H,W] in [-1,1] (scaled to the target dims by the
-    /// caller). Returns (packed [1, refSeq, 128], ids [refSeq, 4]) at t-offset `tCoord`.
+    /// Reference conditioning for one image [1,3,H,W] in [-1,1] (any H, W; `KleinReference` sizes it,
+    /// aspect kept). Returns (packed [1, refSeq, 128], ids [refSeq, 4]) at t-offset `tCoord`.
     public static func prepareReference(
         image: MLXArray, vaeEncoder: KleinVAEEncoder,
         bnMean: MLXArray, bnStd: MLXArray, tCoord: Int32
@@ -35,7 +35,7 @@ public enum KleinEditPipeline {
     }
 
     /// Compositional edit: generate a target (from noise) conditioned on reference images.
-    /// referenceImages: each [1,3,targetH,targetW] in [-1,1].
+    /// referenceImages: each [1,3,H,W] in [-1,1], each at its own size (`KleinReference`).
     /// Base tier: pass `negativeEmbeds` + `guidanceScale > 1` for two-pass CFG on the edit
     /// (reference tokens are identical in both passes; only the text conditioning differs). Leave
     /// `negativeEmbeds` nil for the distilled single-forward path.
