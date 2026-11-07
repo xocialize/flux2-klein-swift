@@ -79,6 +79,7 @@ public enum KleinPipeline {
         seed: UInt64 = 0,
         initPacked: MLXArray? = nil,
         transformerDtype: DType = .bfloat16,
+        latentUpscale: KleinLatentUpscale? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> Result {
         let gridH = height / 16, gridW = width / 16   // 2×(H//16)/2 = H//16
@@ -139,7 +140,8 @@ public enum KleinPipeline {
         KleinProgress.report(.decode)
         // unpack [1, seq, 128] → [1, 128, gridH, gridW] then decodePackedLatents (bn-denorm + unpatch + decode)
         let unpacked = packed.asType(.float32).reshaped(1, gridH, gridW, 128).transposed(0, 3, 1, 2)
-        let image = vae.decodePackedLatents(unpacked)
+        // `latentUpscale`: FlowUpscaler passes, then the row-band decode (KleinDecode, AB-A-0257).
+        let image = KleinDecode.decode(vae: vae, unpacked: unpacked, upscale: latentUpscale)
         eval(image)
         return Result(latents: packed, image: image)
     }

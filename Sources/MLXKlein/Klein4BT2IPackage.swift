@@ -98,10 +98,22 @@ public final class Klein4BT2IPackage: ModelPackage {
                 // lower (phys @768² floor 5.13 / peak 10.06) — surfaced dynamically via
                 // KleinConfiguration.FootprintConfigured when evictEncoder is set, so the 16 GB tier is
                 // admissible without changing these resident-path defaults.
+                //
+                // Latent upscale (v0.11.0, AB-A-0257): `metaData["latentUpscale"]` 1 | 2 draws at ≤ 1024² and decodes
+                // 2048² / 4096² in row bands. Measured through this package (klein-cli --pkg-e2e --upscale 0,1,2, bf16,
+                // MLX pool capped at 2 GB, M5 Max, 6 prompts): 1024² phys 25.6 GB; 2048² MLX peak 20.75 GB (under the
+                // 1024² run's 24.4); 4096² MLX peak 39.29 GB, phys 40.66 GB = 25.96 GB over the declared bf16
+                // resident. The decode is fp32 whatever the DiT quant, so the line is the same for every tier:
+                // `ActivationScaling` on output pixels, the line through the 11.2 GB scalar at 1024² and 27.0 GB at
+                // 4096² (+4 % over 25.96), sized per run (`WorkloadDeclaring`); past 4096² the engine refuses. A
+                // ≤ 1024² run reserves what it did before.
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 11_200_000_000),
-                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 11_200_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 11_200_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 11_200_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.activationScaling),
+                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 11_200_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.activationScaling),
+                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 11_200_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.activationScaling),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
@@ -113,7 +125,10 @@ public final class Klein4BT2IPackage: ModelPackage {
                     name: "flux2-klein-4b-t2i",
                     summary: "FLUX.2-klein-4B text-to-image (Apache-2.0): compact 4B rectified-flow "
                         + "MMDiT distilled to 4 steps (guidance 1.0, no negative prompt), Qwen3-4B "
-                        + "3-layer conditioning + FLUX.2 VAE; ~6 s @1024² int4 on a 16 GB Mac.",
+                        + "3-layer conditioning + FLUX.2 VAE; ~6 s @1024² int4 on a 16 GB Mac. "
+                        + "metaData[\"latentUpscale\"] = 1 | 2 draws at the requested size (≤ 1024² of area) and "
+                        + "doubles the latents once or twice (FlowUpscaler) before the decode: the same picture at 2× "
+                        + "or 4× per side, up to 4096².",
                     modes: []
                 ).declaring(adapters: KleinAdapters.support(.textToImage)),
                 IEditContract.descriptor(
@@ -122,7 +137,8 @@ public final class Klein4BT2IPackage: ModelPackage {
                         + "new image from one or more reference images (subject/style/scene) via "
                         + "reference-token conditioning — 'the subject from image 1, on a beach'. "
                         + "Pass conditioning images in prompt order. A reference-conditioned adapter's "
-                        + "conditioning images lead the references, in slot order.",
+                        + "conditioning images lead the references, in slot order. metaData[\"latentUpscale\"] = 1 | 2 "
+                        + "as on text-to-image.",
                     modes: []
                 ).declaring(adapters: KleinAdapters.support(.imageEdit))
             ]
@@ -140,6 +156,8 @@ public final class Klein4BT2IPackage: ModelPackage {
     /// Encoder-evict mode only: loads the Qwen3-4B conditioner on demand (nil when the encoder is
     /// held resident inside the generator).
     private var encoderProvider: (() async throws -> KleinTextEncoder)?
+    /// FlowUpscaler, loaded on the first request that asks for `latentUpscale` (237 MB in fp32 compute).
+    private var flowUpscaler: FlowUpscaler?
 
     public nonisolated init(configuration: Configuration) { self.configuration = configuration }
 
@@ -209,8 +227,29 @@ public final class Klein4BT2IPackage: ModelPackage {
         appliedAdapters = []
         residentLoRA = []
         encoderProvider = nil
+        flowUpscaler = nil
         MLX.Memory.clearCache()
     }
+
+    /// The request's latent upscale (`metaData["latentUpscale"]`), validated against the draw; nil when not asked for.
+    func latentUpscale(metaData: MetaData, width: Int, height: Int, seed: UInt64) throws -> KleinLatentUpscale? {
+        let passes = try KleinLatentUpscaleOption.passes(metaData)
+        try KleinLatentUpscaleOption.validate(width: width, height: height, passes: passes)
+        guard passes > 0 else { return nil }
+        guard configuration.latentUpscaler else {
+            throw PackageError.unsupportedRequestFeature(
+                "metaData[\"latentUpscale\"] — this configuration has latentUpscaler off")
+        }
+        if flowUpscaler == nil {
+            guard let url = configuration.resolvedLatentUpscalerFile(storeRoot: configuration.modelsRootDirectory) else {
+                throw KleinPackageError.unreadableSnapshot(
+                    "FlowUpscaler weights (\(KleinConfiguration.latentUpscalerRepo)) not found")
+            }
+            flowUpscaler = try FlowUpscaler.load(url: url, dtype: .float32)
+        }
+        return KleinLatentUpscale(upscaler: flowUpscaler!, passes: passes, seed: seed)
+    }
+
 
     /// Make `adapters` the DiT's active set, when it differs from the one applied. The engine
     /// resolved and verified them (`resolvedAdapters`); this package checks only what it alone
@@ -277,7 +316,8 @@ public final class Klein4BT2IPackage: ModelPackage {
             // Base tier: request guidance overrides the config default (>1 ⇒ two-pass CFG + negative
             // prompt). Distilled config default is 1.0 ⇒ single forward, negative ignored.
             let guidance = Float(t2i.guidanceScale ?? Double(configuration.guidanceScale))
-            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) adapters=\(t2i.resolvedAdapters.count) \(width)x\(height)")
+            let upscale = try latentUpscale(metaData: t2i.metaData, width: width, height: height, seed: t2i.seed ?? 0)
+            prof.beginRun("flux2-klein textToImage steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) adapters=\(t2i.resolvedAdapters.count) \(width)x\(height) latentUpscale=\(upscale?.passes ?? 0)")
             let pixels: [UInt8], w: Int, h: Int
             if configuration.evictEncoder {
                 let (pos, neg) = try await encodeAndEvict(
@@ -285,13 +325,13 @@ public final class Klein4BT2IPackage: ModelPackage {
                 (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
                     generator.generate(
                         promptEmbeds: pos, negativeEmbeds: neg, width: width, height: height,
-                        steps: steps, seed: t2i.seed ?? 0, guidanceScale: guidance)
+                        steps: steps, seed: t2i.seed ?? 0, guidanceScale: guidance, latentUpscale: upscale)
                 }
             } else {
                 (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
                     generator.generate(
                         prompt: t2i.prompt, width: width, height: height, steps: steps, seed: t2i.seed ?? 0,
-                        negativePrompt: t2i.negativePrompt, guidanceScale: guidance)
+                        negativePrompt: t2i.negativePrompt, guidanceScale: guidance, latentUpscale: upscale)
                 }
             }
             prof.endRun(denominators: ["step": Double(steps)])
@@ -312,6 +352,7 @@ public final class Klein4BT2IPackage: ModelPackage {
             let maxArea = KleinReference.maxArea(outputWidth: width, outputHeight: height)
             let refs = try (conditioning + edit.images).map { try Self.decodeReference($0, maxArea: maxArea) }
             let guidance = Float(edit.guidanceScale ?? Double(configuration.guidanceScale))
+            let upscale = try latentUpscale(metaData: edit.metaData, width: width, height: height, seed: edit.seed ?? 0)
             prof.beginRun("flux2-klein imageEdit refs=\(refs.count) adapters=\(edit.resolvedAdapters.count) steps=\(steps) g=\(guidance) evict=\(configuration.evictEncoder) \(width)x\(height)")
             let pixels: [UInt8], w: Int, h: Int
             if configuration.evictEncoder {
@@ -320,14 +361,15 @@ public final class Klein4BT2IPackage: ModelPackage {
                 (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
                     generator.generateEdit(
                         promptEmbeds: pos, negativeEmbeds: neg, referenceImages: refs, width: width,
-                        height: height, steps: steps, seed: edit.seed ?? 0, guidanceScale: guidance)
+                        height: height, steps: steps, seed: edit.seed ?? 0, guidanceScale: guidance,
+                        latentUpscale: upscale)
                 }
             } else {
                 (pixels, w, h) = KleinProgress.$sink.withValue(KleinProgressBridge.forward) {
                     generator.generateEdit(
                         prompt: edit.prompt, referenceImages: refs, width: width, height: height,
                         steps: steps, seed: edit.seed ?? 0,
-                        negativePrompt: edit.negativePrompt, guidanceScale: guidance)
+                        negativePrompt: edit.negativePrompt, guidanceScale: guidance, latentUpscale: upscale)
                 }
             }
             prof.endRun(denominators: ["step": Double(steps)])

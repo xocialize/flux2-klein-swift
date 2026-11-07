@@ -28,6 +28,16 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     /// request's adapters. Env-specific ⇒ excluded from Codable.
     public var loraPath: String?
     public var loraStrength: Float
+    /// Latent upscaling (`metaData["latentUpscale"] = 1 | 2`, AB-A-0257): declares FlowUpscaler's weights
+    /// (`latentUpscalerRepo`, 118.6 MB) as a weight source, so the engine materializes them. Off ⇒ the option is
+    /// refused and nothing extra is downloaded. Default on.
+    public var latentUpscaler: Bool
+    /// A local `flow_upscaler.safetensors` (or its folder), overriding the store. Env-specific ⇒ not persisted.
+    public var latentUpscalerPath: String?
+
+    /// FlowUpscaler (TensorForger, Unlicense) converted to bf16.
+    public static let latentUpscalerRepo = "mlx-community/FlowUpscaler-bf16"
+    public static let latentUpscalerFile = "flow_upscaler.safetensors"
 
     public init(
         repo: String = "mlx-community/FLUX.2-klein-4B-bf16",
@@ -39,7 +49,9 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         evictEncoder: Bool = false,
         modelsRootDirectory: URL? = nil,
         loraPath: String? = nil,
-        loraStrength: Float = 1.0
+        loraStrength: Float = 1.0,
+        latentUpscaler: Bool = true,
+        latentUpscalerPath: String? = nil
     ) {
         self.repo = repo
         self.revision = revision
@@ -51,6 +63,8 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         self.modelsRootDirectory = modelsRootDirectory
         self.loraPath = loraPath
         self.loraStrength = loraStrength
+        self.latentUpscaler = latentUpscaler
+        self.latentUpscalerPath = latentUpscalerPath
     }
 
     /// Distilled fast tier (the default): klein-4B, 4-step, guidance 1.0 (no CFG).
@@ -70,7 +84,7 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     }
 
     private enum CodingKeys: String, CodingKey {
-        case repo, revision, quant, defaultSteps, guidanceScale, evictEncoder
+        case repo, revision, quant, defaultSteps, guidanceScale, evictEncoder, latentUpscaler
     }
 
     public init(from decoder: Decoder) throws {
@@ -83,6 +97,8 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
         evictEncoder = try c.decodeIfPresent(Bool.self, forKey: .evictEncoder) ?? false
         loraPath = nil          // env-specific runtime override; not persisted
         loraStrength = 1.0
+        latentUpscaler = try c.decodeIfPresent(Bool.self, forKey: .latentUpscaler) ?? true
+        latentUpscalerPath = nil
     }
 
     // MARK: FootprintConfigured — the encoder-evict "light tier" has a far lower footprint than the
@@ -92,26 +108,60 @@ public struct KleinConfiguration: PackageConfiguration, ModelStorable, QuantConf
     // Non-evict ⇒ nil ⇒ the governor uses the matched QuantFootprint.
     public var residentBytesHint: UInt64? { evictEncoder ? 5_200_000_000 : nil }
     public var peakActivationBytesHint: UInt64? { evictEncoder ? 5_000_000_000 : nil }
+    /// The evict tier's own line over output pixels (latent upscale, AB-A-0257): through its 5.0 GB at 768², so the
+    /// 16 GB tier reserves what it did, and the shared 27.0 GB at 4096².
+    public var activationScalingHint: ActivationScaling? {
+        evictEncoder ? KleinLatentUpscaleOption.evictActivationScaling : nil
+    }
 }
 
 extension KleinConfiguration: WeightSourcing {
     /// bf16 snapshot (one repo; klein-4B ships all-bf16). int8/int4 quantize at load from it —
     /// pre-quantized repos are a later download-size optimization.
     public var weightSources: [WeightSource] {
-        [WeightSource(role: "snapshot", repo: repo, revision: revision,
-                      matching: ["transformer/*", "text_encoder/*", "vae/*", "tokenizer/*", "*.json"])]
+        [snapshotSource] + (latentUpscaler ? [upscalerSource] : [])
+    }
+
+    var snapshotSource: WeightSource {
+        WeightSource(role: "snapshot", repo: repo, revision: revision,
+                     matching: ["transformer/*", "text_encoder/*", "vae/*", "tokenizer/*", "*.json"])
+    }
+
+    var upscalerSource: WeightSource {
+        WeightSource(role: "latent-upscaler", repo: Self.latentUpscalerRepo,
+                     matching: [Self.latentUpscalerFile, "LICENSE", "README.md"])
     }
 
     public func missingWeightSources(storeRoot: URL?) -> [WeightSource] {
         let fm = FileManager.default
+        var missing: [WeightSource] = []
         if let snapshotPath,
            fm.fileExists(atPath: URL(fileURLWithPath: snapshotPath).appendingPathComponent("transformer").path) {
-            return []
+        } else if let dir = ModelStore(root: storeRoot).directory(for: repo),
+                  fm.fileExists(atPath: dir.appendingPathComponent("transformer").path)
+                    && fm.fileExists(atPath: dir.appendingPathComponent("vae").path) {
+        } else {
+            missing.append(snapshotSource)
         }
-        guard let dir = ModelStore(root: storeRoot).directory(for: repo) else { return weightSources }
-        let present = fm.fileExists(atPath: dir.appendingPathComponent("transformer").path)
-            && fm.fileExists(atPath: dir.appendingPathComponent("vae").path)
-        return present ? [] : weightSources
+        if latentUpscaler, resolvedLatentUpscalerFile(storeRoot: storeRoot) == nil { missing.append(upscalerSource) }
+        return missing
+    }
+
+    /// FlowUpscaler's weights: `latentUpscalerPath` (a file or its folder), else the store's copy; nil if absent.
+    public func resolvedLatentUpscalerFile(storeRoot: URL?) -> URL? {
+        let fm = FileManager.default
+        var candidates: [URL] = []
+        if let latentUpscalerPath {
+            let url = URL(fileURLWithPath: latentUpscalerPath)
+            candidates += [url, url.appendingPathComponent(Self.latentUpscalerFile)]
+        }
+        if let dir = ModelStore(root: storeRoot).directory(for: Self.latentUpscalerRepo) {
+            candidates.append(dir.appendingPathComponent(Self.latentUpscalerFile))
+        }
+        return candidates.first { url in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && !isDir.boolValue
+        }
     }
 
     public func resolvedSnapshotDirectory(storeRoot: URL?) -> URL? {

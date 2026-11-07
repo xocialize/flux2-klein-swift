@@ -30,10 +30,15 @@ public final class Klein4BBaseT2IPackage: ModelPackage {
                 // CFG floor 9.33 / peak 21.68 (activation 12.35); int8/bf16 scale resident by the
                 // DiT-weight delta, activation held. Encoder-evict lowers this the same way as the
                 // distilled tier (KleinConfiguration.FootprintConfigured).
+                // Latent upscale (v0.11.0, AB-A-0257): the same fp32 row-band decode as the distilled tier (Klein4BT2I-
+                // Package), so the same 27.0 GB at 4096², on a line through this tier's 12.4 GB scalar at 1024².
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 12_400_000_000),
-                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 12_400_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 12_400_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 14_700_000_000, peakActivationBytes: 12_400_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.baseTierActivationScaling),
+                    QuantFootprint(quant: .int8, residentBytes: 11_500_000_000, peakActivationBytes: 12_400_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.baseTierActivationScaling),
+                    QuantFootprint(quant: .int4, residentBytes: 9_300_000_000, peakActivationBytes: 12_400_000_000,
+                                   activationScaling: KleinLatentUpscaleOption.baseTierActivationScaling),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
@@ -46,7 +51,8 @@ public final class Klein4BBaseT2IPackage: ModelPackage {
                     summary: "FLUX.2-klein-base-4B text-to-image (Apache-2.0): the QUALITY tier — NOT "
                         + "guidance-distilled, so it runs classic two-pass CFG (guidance 4.0) + "
                         + "negative prompts over ~28 steps for stronger prompt adherence than the "
-                        + "4-step distilled tier. Same 4B MMDiT + Qwen3-4B + FLUX.2 VAE.",
+                        + "4-step distilled tier. Same 4B MMDiT + Qwen3-4B + FLUX.2 VAE. "
+                        + "metaData[\"latentUpscale\"] = 1 | 2: draw ≤ 1024², upscale ×2 / ×4 before the decode.",
                     modes: []
                 ).declaring(adapters: KleinAdapters.support(.textToImage)),
                 IEditContract.descriptor(

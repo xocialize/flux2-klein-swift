@@ -42,12 +42,13 @@ public final class KleinGenerator {
     /// T2I from pre-computed conditioning. `negativeEmbeds` + `guidanceScale > 1` ⇒ two-pass CFG.
     public func generate(
         promptEmbeds: MLXArray, negativeEmbeds: MLXArray?, width: Int, height: Int, steps: Int,
-        seed: UInt64, guidanceScale: Float = 1.0, onStep: ((Int, Int) -> Void)? = nil
+        seed: UInt64, guidanceScale: Float = 1.0, latentUpscale: KleinLatentUpscale? = nil,
+        onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         let result = KleinPipeline.generate(
             transformer: transformer, vae: vae, promptEmbeds: promptEmbeds, negativeEmbeds: negativeEmbeds,
             height: height, width: width, numInferenceSteps: steps, guidanceScale: guidanceScale,
-            seed: seed, transformerDtype: transformerDtype, onStep: onStep)
+            seed: seed, transformerDtype: transformerDtype, latentUpscale: latentUpscale, onStep: onStep)
         // image is nil only when the run's task was cancelled (decode skipped); the engine
         // wrapper's post-call checkpoint rethrows before these pixels are consumed.
         guard let image = result.image else { return ([], width, height) }
@@ -58,7 +59,7 @@ public final class KleinGenerator {
     public func generateEdit(
         promptEmbeds: MLXArray, negativeEmbeds: MLXArray?, referenceImages: [MLXArray],
         width: Int, height: Int, steps: Int, seed: UInt64, guidanceScale: Float = 1.0,
-        onStep: ((Int, Int) -> Void)? = nil
+        latentUpscale: KleinLatentUpscale? = nil, onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         guard let vaeEncoder, let bnMean, let bnStd else {
             fatalError("edit path requires the VAE encoder + bn stats")
@@ -67,7 +68,7 @@ public final class KleinGenerator {
             transformer: transformer, vae: vae, vaeEncoder: vaeEncoder, bnMean: bnMean, bnStd: bnStd,
             promptEmbeds: promptEmbeds, negativeEmbeds: negativeEmbeds, referenceImages: referenceImages,
             height: height, width: width, numInferenceSteps: steps, guidanceScale: guidanceScale,
-            seed: seed, transformerDtype: transformerDtype, onStep: onStep)
+            seed: seed, transformerDtype: transformerDtype, latentUpscale: latentUpscale, onStep: onStep)
         // Cancelled-task decode skip — see generate(promptEmbeds:...).
         guard let image = result.image else { return ([], width, height) }
         return Self.toPixels(image[0])
@@ -78,7 +79,7 @@ public final class KleinGenerator {
     /// Compositional multi-reference edit → interleaved RGB8. referenceImages: each [1,3,H,W] [-1,1].
     public func generateEdit(
         prompt: String, referenceImages: [MLXArray], width: Int, height: Int, steps: Int, seed: UInt64,
-        negativePrompt: String? = nil, guidanceScale: Float = 1.0,
+        negativePrompt: String? = nil, guidanceScale: Float = 1.0, latentUpscale: KleinLatentUpscale? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         guard let textEncoder else { fatalError("prompt path requires a resident textEncoder") }
@@ -87,7 +88,7 @@ public final class KleinGenerator {
         let negEmbeds = (guidanceScale > 1.0) ? textEncoder.encode(negativePrompt ?? "") : nil
         return generateEdit(promptEmbeds: embeds, negativeEmbeds: negEmbeds, referenceImages: referenceImages,
                             width: width, height: height, steps: steps, seed: seed,
-                            guidanceScale: guidanceScale, onStep: onStep)
+                            guidanceScale: guidanceScale, latentUpscale: latentUpscale, onStep: onStep)
     }
 
     /// Returns interleaved RGB8 pixels + dimensions. `guidanceScale > 1` + a `negativePrompt`
@@ -95,7 +96,7 @@ public final class KleinGenerator {
     /// no negative) for the single-forward fast path.
     public func generate(
         prompt: String, width: Int, height: Int, steps: Int, seed: UInt64,
-        negativePrompt: String? = nil, guidanceScale: Float = 1.0,
+        negativePrompt: String? = nil, guidanceScale: Float = 1.0, latentUpscale: KleinLatentUpscale? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         guard let textEncoder else { fatalError("prompt path requires a resident textEncoder") }
@@ -103,6 +104,7 @@ public final class KleinGenerator {
         let embeds = textEncoder.encode(prompt)
         let negEmbeds = (guidanceScale > 1.0) ? textEncoder.encode(negativePrompt ?? "") : nil
         return generate(promptEmbeds: embeds, negativeEmbeds: negEmbeds, width: width, height: height,
-                        steps: steps, seed: seed, guidanceScale: guidanceScale, onStep: onStep)
+                        steps: steps, seed: seed, guidanceScale: guidanceScale, latentUpscale: latentUpscale,
+                        onStep: onStep)
     }
 }

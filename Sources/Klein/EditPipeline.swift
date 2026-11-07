@@ -46,6 +46,7 @@ public enum KleinEditPipeline {
         height: Int = 1024, width: Int = 1024, numInferenceSteps: Int = 4,
         guidanceScale: Float = 1.0,
         seed: UInt64 = 0, transformerDtype: DType = .bfloat16,
+        latentUpscale: KleinLatentUpscale? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> KleinPipeline.Result {
         let gridH = height / 16, gridW = width / 16
@@ -107,7 +108,7 @@ public enum KleinEditPipeline {
         if Task.isCancelled { return KleinPipeline.Result(latents: packed, image: nil) }
         KleinProgress.report(.decode)
         let unpacked = packed.asType(.float32).reshaped(1, gridH, gridW, 128).transposed(0, 3, 1, 2)
-        let image = vae.decodePackedLatents(unpacked)
+        let image = KleinDecode.decode(vae: vae, unpacked: unpacked, upscale: latentUpscale)
         eval(image)
         return KleinPipeline.Result(latents: packed, image: image)
     }

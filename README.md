@@ -117,6 +117,47 @@ of truth for the runtime adapter catalog (AB-A-0191).
   - `AdapterTests` runs the ADP-1..4 gate over both manifests and this file;
   - `LoRAMappingTests` checks every adapter's header (`Tests/KleinTests/Fixtures`) maps completely.
 
+## Latent upscale to 2048² and 4096² (v0.11.0, AB-A-0257)
+
+`metaData["latentUpscale"] = 1 | 2` on either surface (T2I and edit, both tiers): the DiT draws at the request's size
+(at most 1024² of area), then [FlowUpscaler](https://huggingface.co/mlx-community/FlowUpscaler-bf16)
+(TensorForger, Unlicense; `FlowUpscaler` in flux2-vae-mlx-swift 0.8.0) doubles the latents once or twice, and the
+row-band decode draws the larger image. The response is 2× or 4× the draw on each side, up to 4096². It is the picture
+the 1024² draw made, with finer detail; Klein asked for 2048² itself draws a different picture (AB-R-0795).
+
+```swift
+let r = try await package.run(T2IRequest(prompt: prompt, width: 1024, height: 1024, seed: 44,
+                                         metaData: ["latentUpscale": .int(1)])) as! T2IResponse   // 2048×2048
+```
+
+- **Seeded:** pass i draws its noise from `seed + i`.
+- **Refused:** a draw over 1024² of area with the option, a value other than 1 or 2, and (since v0.11.0) a plain
+  draw over 2048² of area, which was never measured (the error points to the option).
+- **Weights:** `KleinConfiguration.latentUpscaler` (default on) declares `mlx-community/FlowUpscaler-bf16`
+  (118.6 MB) as a second weight source; `latentUpscalerPath` points at a local copy. The upscaler loads on the first
+  request that asks for it (237 MB, fp32 compute). Off ⇒ the option is refused and nothing more is downloaded.
+- **Plain draws past 1024²** now take the row-band decode too: the same image, and a native 2048² draw peaks at
+  6.9 GB over resident instead of the untiled decode's ~42 GB.
+
+**Measured** through this package (`klein-cli --pkg-e2e --upscale 0,1,2`, bf16 distilled, 4 steps, M5 Max, MLX pool
+capped at the engine's 2 GB), AB-R-0795's six prompts:
+
+| | 1024² draw | → 2048² | → 4096² |
+|---|---|---|---|
+| Wall time per request (mean) | 6.75 s | 10.6 s | 33.4 s |
+| MLX peak (resident 13.65 GB) | 24.40 GB | 20.75 GB | 39.29 GB |
+| Process phys_footprint peak | 25.6 GB | ≤ 25.6 GB | 40.5–40.7 GB |
+| DISTS vs the 1024² decode, downscaled (min–max, mean) | — | 0.017–0.035, 0.029 | 0.035–0.056, 0.045 |
+
+The 2048² run peaks below the 1024² one: its decode is in row bands, the 1024² decode is untiled. The DISTS band is
+the eval's (0.015–0.034 at 2048², 0.031–0.061 at 4096²). `Tools/latent-upscale/drift.py` scores it.
+
+**Footprint.** The upscale and the fp32 decode do not depend on the DiT tier. Each footprint carries an
+`ActivationScaling` on output pixels: a line through the tier's scalar at 1024² (11.2 GB distilled, 12.4 GB base) and
+27.0 GB at 4096² (4096²'s 25.96 GB over the declared bf16 resident, +4 %). `KleinConfiguration` is
+`WorkloadDeclaring` (the draw × 4^passes), so the engine reserves per run and refuses past 4096². A ≤ 1024² run
+reserves what it did before. The encoder-evict tier's line runs through its 5.0 GB at 768².
+
 ## Edit references keep their aspect (v0.10.2, AB-A-0213)
 
 Up to 0.10.1, every edit reference (the request's images and IC conditioning images alike) was drawn into an

@@ -227,27 +227,48 @@ struct KleinCLI {
             return
         }
         // --pkg-e2e: drive the real Klein4BT2IPackage (load→run→decode).
+        //   --upscale 0,1,2   one run per value, same prompt and seed, `metaData["latentUpscale"]` = n (0 = none);
+        //                     outputs <out>-x<2^n>.png. --models-root <dir> finds FlowUpscaler in the store, or
+        //                     --upscaler <file|dir>. Prints each run's MLX peak and the process phys_footprint peak.
         if flag("--pkg-e2e") {
             let snap = opt("--snapshot") ?? URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("weights/FLUX.2-klein-4B").path
-            let q: Quant = opt("--quant").flatMap { Int($0) } == 4 ? .int4 : .bf16
+            let quantBits = opt("--quant").flatMap { Int($0) }   // opt() consumes the flag: read it once
+            let q: Quant = quantBits == 4 ? .int4 : quantBits == 8 ? .int8 : .bf16
             let evict = flag("--evict")
-            let pkg = Klein4BT2IPackage(configuration: .init(quant: q, snapshotPath: snap, evictEncoder: evict))
+            let modelsRoot = opt("--models-root").map { URL(fileURLWithPath: $0) }
+            let upscalerPath = opt("--upscaler")
+            let upscales = (opt("--upscale") ?? "0").split(separator: ",").compactMap { Int($0) }
+            let seed = UInt64(opt("--seed") ?? "42")!
+            // The engine's pool cap (MLXServeCore .automatic, 2 GB), so phys_footprint reads as it does in a worker.
+            MLX.Memory.cacheLimit = Int(opt("--cache-gb") ?? "2")! << 30
+            let pkg = Klein4BT2IPackage(configuration: .init(
+                quant: q, snapshotPath: snap, evictEncoder: evict, modelsRootDirectory: modelsRoot,
+                latentUpscalerPath: upscalerPath))
             print("[pkg-e2e] surface=\(Klein4BT2IPackage.manifest.surfaces[0].name) quant=\(q) evict=\(evict)")
             let t0 = Date(); try await pkg.load()
             let residentMB = MLX.Memory.activeMemory / (1 << 20)
             print("[pkg-e2e] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s | resident floor \(residentMB)MB")
-            let t1 = Date()
             let sz = Int(opt("--size") ?? "1024")!
-            let resp = try await pkg.run(T2IRequest(
-                prompt: opt("--prompt") ?? "a red fox sitting in a snowy forest at sunrise, photorealistic",
-                width: sz, height: sz, seed: 42)) as! T2IResponse
-            print("[pkg-e2e] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s → "
-                  + "\(resp.image.width)x\(resp.image.height) \(resp.image.data.count) bytes .\(resp.image.format)")
-            try resp.image.data.write(to: URL(fileURLWithPath: opt("--out") ?? "klein_pkg_e2e.png"))
-            print("[pkg-e2e] PEAK \(MLX.Memory.peakMemory / (1 << 20))MB | resident-floor \(residentMB)MB | quant=\(q) evict=\(evict)")
+            let prompt = opt("--prompt") ?? "a red fox sitting in a snowy forest at sunrise, photorealistic"
+            let out = opt("--out") ?? "klein_pkg_e2e.png"
+            for n in upscales {
+                MLX.Memory.peakMemory = 0
+                let t1 = Date()
+                let resp = try await pkg.run(T2IRequest(
+                    prompt: prompt, width: sz, height: sz, seed: seed,
+                    metaData: n > 0 ? ["latentUpscale": .int(n)] : [:])) as! T2IResponse
+                let secs = Date().timeIntervalSince(t1)
+                let path = upscales.count > 1 || n > 0
+                    ? out.replacingOccurrences(of: ".png", with: "-x\(1 << n).png") : out
+                try resp.image.data.write(to: URL(fileURLWithPath: path))
+                print("[pkg-e2e] latentUpscale=\(n) draw \(sz)² → \(resp.image.width ?? 0)x\(resp.image.height ?? 0): "
+                      + String(format: "%.2f s", secs) + " | MLX PEAK \(MLX.Memory.peakMemory / (1 << 20))MB"
+                      + " | phys_footprint peak \(physFootprintPeakMB())MB | quant=\(q) evict=\(evict) → \(path)")
+                MLX.Memory.clearCache()
+            }
             await pkg.unload()
             return
         }
@@ -389,4 +410,16 @@ struct KleinCLI {
         CGImageDestinationAddImage(dest, ctx.makeImage()!, nil); CGImageDestinationFinalize(dest)
         print("[cli] wrote \(out)")
     }
+}
+
+/// The process's lifetime-max phys_footprint (what the governor and the in-app probes read), in MB.
+func physFootprintPeakMB() -> UInt64 {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return kr == KERN_SUCCESS ? UInt64(max(0, info.ledger_phys_footprint_peak)) / (1 << 20) : 0
 }

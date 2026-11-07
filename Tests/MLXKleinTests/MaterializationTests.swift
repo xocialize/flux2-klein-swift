@@ -9,11 +9,14 @@ import XCTest
 
 final class MaterializationTests: XCTestCase {
 
+    /// A snapshot with transformer/ + vae/, and FlowUpscaler's file under `upscaler/` (pass it as latentUpscalerPath).
     private func satisfiedSnapshot() throws -> (dir: URL, cleanup: () -> Void) {
         let base = FileManager.default.temporaryDirectory.appending(path: "klein-mat-\(UUID().uuidString)")
-        for sub in ["transformer", "vae"] {
+        for sub in ["transformer", "vae", "upscaler"] {
             try FileManager.default.createDirectory(at: base.appending(path: sub), withIntermediateDirectories: true)
         }
+        FileManager.default.createFile(
+            atPath: base.appending(path: "upscaler/\(KleinConfiguration.latentUpscalerFile)").path, contents: Data())
         return (base, { try? FileManager.default.removeItem(at: base) })
     }
 
@@ -21,30 +24,40 @@ final class MaterializationTests: XCTestCase {
         let (dir, cleanup) = try satisfiedSnapshot(); defer { cleanup() }
         let report = MaterializationConformance.check(
             freshConfiguration: KleinConfiguration(quant: .int4),
-            satisfiedConfiguration: KleinConfiguration(quant: .int4, snapshotPath: dir.path))
+            satisfiedConfiguration: KleinConfiguration(quant: .int4, snapshotPath: dir.path,
+                                                       latentUpscalerPath: dir.appending(path: "upscaler").path))
         XCTAssertTrue(report.passed, report.summary)
     }
 
-    func testWeightSourcesSingleSnapshot() {
+    func testWeightSourcesSnapshotAndUpscaler() {
         let s = KleinConfiguration().weightSources
-        XCTAssertEqual(s.map(\.role), ["snapshot"])
+        XCTAssertEqual(s.map(\.role), ["snapshot", "latent-upscaler"])
         XCTAssertEqual(s[0].repo, "mlx-community/FLUX.2-klein-4B-bf16")
         XCTAssertTrue(s[0].matching!.contains("transformer/*"))
+        XCTAssertEqual(s[1].repo, "mlx-community/FlowUpscaler-bf16")
+        XCTAssertEqual(KleinConfiguration(latentUpscaler: false).weightSources.map(\.role), ["snapshot"])
     }
 
     func testStoreLayoutAndExplicitPath() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "klein-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let cfg = KleinConfiguration()
-        XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).count, 1)
+        XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).map(\.role), ["snapshot", "latent-upscaler"])
         // Path from ModelStore so the fixture tracks the engine's canonical layout
         // (models--org--name since contract 1.22.0) instead of a stale literal.
         let dir = ModelStore(root: root).directory(for: "mlx-community/FLUX.2-klein-4B-bf16")!
         for sub in ["transformer", "vae"] {
             try FileManager.default.createDirectory(at: dir.appending(path: sub), withIntermediateDirectories: true)
         }
+        XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).map(\.role), ["latent-upscaler"])
+        let up = ModelStore(root: root).directory(for: KleinConfiguration.latentUpscalerRepo)!
+        try FileManager.default.createDirectory(at: up, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: up.appending(path: KleinConfiguration.latentUpscalerFile).path,
+                                       contents: Data())
         XCTAssertTrue(cfg.missingWeightSources(storeRoot: root).isEmpty)
         XCTAssertEqual(cfg.resolvedSnapshotDirectory(storeRoot: root)?.path, dir.path)
+        XCTAssertEqual(cfg.resolvedLatentUpscalerFile(storeRoot: root)?.lastPathComponent,
+                       KleinConfiguration.latentUpscalerFile)
     }
 
     func testManifestApacheAndSurfaces() {
@@ -67,7 +80,11 @@ final class MaterializationTests: XCTestCase {
         let (dir, cleanup) = try satisfiedSnapshot(); defer { cleanup() }
         let report = MaterializationConformance.check(
             freshConfiguration: KleinConfiguration.base(quant: .int4),
-            satisfiedConfiguration: KleinConfiguration.base(quant: .int4, snapshotPath: dir.path))
+            satisfiedConfiguration: {
+                var c = KleinConfiguration.base(quant: .int4, snapshotPath: dir.path)
+                c.latentUpscalerPath = dir.appending(path: "upscaler").path
+                return c
+            }())
         XCTAssertTrue(report.passed, report.summary)
     }
 

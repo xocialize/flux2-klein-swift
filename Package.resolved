@@ -1,5 +1,5 @@
 {
-  "originHash" : "6c2cf4e754aaf526d60360ce6a745696e4d51ab6d8f022760f9a2e425222c8e5",
+  "originHash" : "b87a22f0c75c69df0ea78e30747cb5d5f115470b934dd84c089445f7d3ef2e89",
   "pins" : [
     {
       "identity" : "designscaffold",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/xocialize/flux2-vae-mlx-swift",
       "state" : {
-        "revision" : "889223384f656efa481fd8e726dcffb3681554ef",
-        "version" : "0.1.0"
+        "revision" : "91db3f6ff26a415687a6f7d82655e9c2b366362b",
+        "version" : "0.8.0"
       }
     },
     {
