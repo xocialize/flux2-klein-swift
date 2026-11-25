@@ -26,16 +26,14 @@ public struct KleinLatentUpscale {
 }
 
 enum KleinDecode {
-    /// Packed NCHW latents [1, 128, gridH, gridW] → image [1, 3, H, W] in [-1, 1]. Without an upscale this is the
-    /// untiled decode, as before; with one, the upscaled latents go through the row-band decode, which is exact.
-    /// A plain draw past 1024² of area also takes the row-band decode: the same image, at a fraction of the untiled
-    /// decode's peak (42 → 6.9 GB at 2048², flux2-vae-mlx-swift 0.6.0).
+    /// Packed NCHW latents [1, 128, gridH, gridW] → image [1, 3, H, W] in [-1, 1], always through the row-band
+    /// decode, which is exact (it matches the untiled decode up to float reassociation, with no seams).
+    ///
+    /// The untiled decode's peak is temporaries: about 8.5 GB over resident at 1024², 42 GB at 2048². In row bands
+    /// the 1024² decode stays about 2.2 GB over resident, so the denoise loop sets a run's peak. It takes the same
+    /// time from 512² up (AB-R-1130; int4 with the encoder evicted at 1024²: 13.3 → 4.8 GB MLX peak).
     static func decode(vae: Flux2VAE, unpacked: MLXArray, upscale: KleinLatentUpscale?) -> MLXArray {
-        guard let upscale else {
-            let pixels = unpacked.dim(2) * 16 * unpacked.dim(3) * 16
-            return pixels > 1024 * 1024 ? vae.decodePackedLatents(unpacked, tile: .standard)
-                : vae.decodePackedLatents(unpacked)
-        }
+        guard let upscale else { return vae.decodePackedLatents(unpacked, tile: .standard) }
         let up = upscale.upscaler.upscalePacked(unpacked, passes: upscale.passes, seed: upscale.seed)
         MLX.Memory.clearCache()
         return vae.decodePackedLatents(up, tile: .standard)

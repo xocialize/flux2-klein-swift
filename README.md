@@ -136,8 +136,8 @@ let r = try await package.run(T2IRequest(prompt: prompt, width: 1024, height: 10
 - **Weights:** `KleinConfiguration.latentUpscaler` (default on) declares `mlx-community/FlowUpscaler-bf16`
   (118.6 MB) as a second weight source; `latentUpscalerPath` points at a local copy. The upscaler loads on the first
   request that asks for it (237 MB, fp32 compute). Off ⇒ the option is refused and nothing more is downloaded.
-- **Plain draws past 1024²** now take the row-band decode too: the same image, and a native 2048² draw peaks at
-  6.9 GB over resident instead of the untiled decode's ~42 GB.
+- **Every draw decodes in row bands** (plain draws past 1024² since v0.11.0, every size since v0.11.1):
+  a native 2048² draw peaks at 6.9 GB over resident instead of the untiled decode's ~42 GB.
 
 **Measured** through this package (`klein-cli --pkg-e2e --upscale 0,1,2`, bf16 distilled, 4 steps, M5 Max, MLX pool
 capped at the engine's 2 GB), AB-R-0795's six prompts:
@@ -149,7 +149,8 @@ capped at the engine's 2 GB), AB-R-0795's six prompts:
 | Process phys_footprint peak | 25.6 GB | ≤ 25.6 GB | 40.5–40.7 GB |
 | DISTS vs the 1024² decode, downscaled (min–max, mean) | — | 0.017–0.035, 0.029 | 0.035–0.056, 0.045 |
 
-The 2048² run peaks below the 1024² one: its decode is in row bands, the 1024² decode is untiled. The DISTS band is
+The 2048² run peaked below the 1024² one because the 1024² decode was still untiled when this table was measured;
+see the next section for the 1024² numbers since. The DISTS band is
 the eval's (0.015–0.034 at 2048², 0.031–0.061 at 4096²). `Tools/latent-upscale/drift.py` scores it.
 
 **Footprint.** The upscale and the fp32 decode do not depend on the DiT tier. Each footprint carries an
@@ -157,6 +158,32 @@ the eval's (0.015–0.034 at 2048², 0.031–0.061 at 4096²). `Tools/latent-ups
 27.0 GB at 4096² (4096²'s 25.96 GB over the declared bf16 resident, +4 %). `KleinConfiguration` is
 `WorkloadDeclaring` (the draw × 4^passes), so the engine reserves per run and refuses past 4096². A ≤ 1024² run
 reserves what it did before. The encoder-evict tier's line runs through its 5.0 GB at 768².
+
+## Row-band decode at every size (v0.11.1, AB-R-1130, AB-R-1134)
+
+`KleinDecode` now takes flux2-vae-mlx-swift's row-band decode at every size, on both surfaces and both tiers. Before,
+a draw of 1024² of area or less took the untiled decode, whose temporaries were the run's peak.
+
+Measured through this package (`klein-cli --pkg-e2e`, distilled, 4 steps, seed 42, one run each, M5 Max, MLX pool
+capped at 2 GB), v0.11.0 against this change:
+
+| | MLX peak before | MLX peak after | phys_footprint peak before → after |
+|---|---|---|---|
+| bf16, 1024² | 24.40 GB | 16.24 GB | 25.3 → 18.3 GB |
+| int8, 1024² | 21.11 GB | 12.66 GB | 22.9 → 14.9 GB |
+| int4, 1024² | 19.36 GB | 10.90 GB | 20.6 → 13.1 GB |
+| int4, encoder evicted, 1024² | 13.42 GB | 8.92 GB | 15.1 → 11.2 GB |
+| int4, encoder evicted, 768² | 8.92 GB | 8.92 GB | 11.2 → 11.2 GB |
+| bf16, 512² | 16.63 GB | 16.24 GB | 18.5 → 18.5 GB |
+
+- **Same picture, not the same bytes:** 61.7–62.8 dB against v0.11.0's output; about 10–12 % of pixels move, by at
+  most 5 of 255 levels.
+- **Same time:** the decode alone takes 2.2–2.5 s untiled and 1.1–2.2 s in bands at 1024², 0.42–0.57 s against
+  0.55–0.56 s at 512², and 0.02 s more at 256².
+- **What sets the peak now:** with the encoder resident, the denoise loop. With the encoder evicted, the bf16
+  encoder while it encodes (8.92 GB at any size), so a quantized encoder is the next lever for the 16 GB tier.
+- **Declared footprints are unchanged** and now over-reserve at 1024² (11.2 GB activation declared; about 2.6 GB
+  measured here for bf16). They were set from in-app runs and should be re-declared from one (AB-T-0290).
 
 ## Edit references keep their aspect (v0.10.2, AB-A-0213)
 
