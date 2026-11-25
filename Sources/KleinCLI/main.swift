@@ -226,6 +226,50 @@ struct KleinCLI {
             await pkg.unload()
             return
         }
+        // --pkg-bonsai: drive KleinBonsaiT2IPackage (Bonsai Image Ternary 4B) the same way, and print what a
+        // footprint declaration needs: the resident floor after load, then each run's MLX peak over it.
+        //   --snapshot <prism-ml snapshot dir> [--size 1024] [--upscale 0,1,2] [--models-root <dir>]
+        //   [--upscaler <file|dir>] [--runs 1] [--seed 42] [--prompt ...] [--out png] [--cache-gb 2]
+        if flag("--pkg-bonsai") {
+            guard let snap = opt("--snapshot") else { print("--pkg-bonsai needs --snapshot <dir>"); return }
+            let upscales = (opt("--upscale") ?? "0").split(separator: ",").compactMap { Int($0) }
+            let seed = UInt64(opt("--seed") ?? "42")!
+            let runs = Int(opt("--runs") ?? "1")!
+            MLX.Memory.cacheLimit = Int(opt("--cache-gb") ?? "2")! << 30
+            let pkg = KleinBonsaiT2IPackage(configuration: .init(
+                snapshotPath: snap,
+                modelsRootDirectory: opt("--models-root").map { URL(fileURLWithPath: $0) },
+                latentUpscalerPath: opt("--upscaler")))
+            let t0 = Date(); try await pkg.load()
+            MLX.Memory.clearCache()
+            let floor = MLX.Memory.activeMemory
+            print("[pkg-bonsai] surface=\(KleinBonsaiT2IPackage.manifest.surfaces[0].name) load "
+                + String(format: "%.2f s", Date().timeIntervalSince(t0)) + " | resident floor \(floor / (1 << 20))MB"
+                + " | phys_footprint peak \(physFootprintPeakMB())MB")
+            let sz = Int(opt("--size") ?? "1024")!
+            let prompt = opt("--prompt") ?? "a red fox sitting in a snowy forest at sunrise, photorealistic"
+            let out = opt("--out") ?? "klein_bonsai.png"
+            for n in upscales {
+                for r in 0 ..< runs {
+                    MLX.Memory.peakMemory = 0
+                    let t1 = Date()
+                    let resp = try await pkg.run(T2IRequest(
+                        prompt: prompt, width: sz, height: sz, seed: seed + UInt64(r),
+                        metaData: n > 0 ? ["latentUpscale": .int(n)] : [:])) as! T2IResponse
+                    let secs = Date().timeIntervalSince(t1)
+                    let path = out.replacingOccurrences(of: ".png", with: "-x\(1 << n)-r\(r).png")
+                    try resp.image.data.write(to: URL(fileURLWithPath: path))
+                    let peak = MLX.Memory.peakMemory
+                    print("[pkg-bonsai] latentUpscale=\(n) draw \(sz)² → \(resp.image.width ?? 0)x\(resp.image.height ?? 0)"
+                        + String(format: ": %.2f s", secs) + " | MLX PEAK \(peak / (1 << 20))MB"
+                        + " | over floor \((peak - min(peak, floor)) / (1 << 20))MB"
+                        + " | phys_footprint peak \(physFootprintPeakMB())MB → \(path)")
+                    MLX.Memory.clearCache()
+                }
+            }
+            await pkg.unload()
+            return
+        }
         // --pkg-e2e: drive the real Klein4BT2IPackage (load→run→decode).
         //   --upscale 0,1,2   one run per value, same prompt and seed, `metaData["latentUpscale"]` = n (0 = none);
         //                     outputs <out>-x<2^n>.png. --models-root <dir> finds FlowUpscaler in the store, or

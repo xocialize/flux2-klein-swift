@@ -17,6 +17,9 @@ Two products:
     **negative prompts** over ~28 steps. Stronger adherence on dense scenes / text / fine attributes
     and on subject-preserving edits, at ~2× the forward cost per step (CFG) — plus the edit path
     doubles the sequence, so a base edit is ~4× a base T2I.
+  - **`KleinBonsaiT2IPackage`** (surface `flux2-klein-4b-bonsai-t2i`) — the **compact** tier:
+    Prism ML's Bonsai Image Ternary 4B, a ternary retrain of klein 4B. A 3.9 GB download, 3.6 GB
+    resident, text-to-image only, best at 1024²-class sizes. See its section below.
 
 > **Status: complete · wrapped · GPU-validated.** Parity vs diffusers goldens (fp32/CPU): DiT
 > cosine **≥0.9999995** at the 64×64 production grid (all 5 double + 20 single blocks, norm_out,
@@ -158,6 +161,45 @@ the eval's (0.015–0.034 at 2048², 0.031–0.061 at 4096²). `Tools/latent-ups
 27.0 GB at 4096² (4096²'s 25.96 GB over the declared bf16 resident, +4 %). `KleinConfiguration` is
 `WorkloadDeclaring` (the draw × 4^passes), so the engine reserves per run and refuses past 4096². A ≤ 1024² run
 reserves what it did before. The encoder-evict tier's line runs through its 5.0 GB at 768².
+
+## Bonsai Image Ternary 4B: the compact tier (v0.12.0, AB-R-1130, AB-R-1138)
+
+`KleinBonsaiT2IPackage` (surface `flux2-klein-4b-bonsai-t2i`) runs Prism ML's
+[Bonsai Image Ternary 4B](https://huggingface.co/prism-ml/bonsai-image-ternary-4B-mlx-2bit) (Apache-2.0): FLUX.2
+klein 4B with the transformer retrained to ternary weights. It ships packed for MLX, a 2-bit DiT (1.43 GB) and a 4-bit
+Qwen3-4B (2.26 GB), 3.88 GB in all, so it is a weight swap on this core with its own loaders
+(`KleinWeights.loadPackedTransformer`, `loadPackedTextEncoder`).
+
+```swift
+let package = KleinBonsaiT2IPackage(configuration: .init())     // weights pinned at the measured revision
+try await package.load()
+let r = try await package.run(T2IRequest(prompt: prompt, width: 1024, height: 1024, seed: 7)) as! T2IResponse
+```
+
+- **Text-to-image only.** No edit surface: its one measured edit kept half the source scene, and Prism ML claims
+  text-to-image only. No adapters either; klein LoRAs are untested on the retrained base, so a request with one is
+  refused.
+- **Draw at 1024²-class sizes.** On our 12-prompt set it gave 10 usable at 1024² (klein int4 10, bf16 11) and 8 at
+  512² (klein 10–11). Texture is a little softer than klein's.
+- **A different picture.** It is a redraw, not a quantization: about 15 dB against klein bf16 at the same seed. Don't
+  use it where a result must match another klein tier.
+- **`metaData["latentUpscale"] = 1 | 2`** works as on the klein tiers.
+
+**Measured** through the package (`klein-cli --pkg-bonsai`, 4 steps, M5 Max, MLX pool capped at 2 GB, three runs per
+size; the machine was busy, so times are indicative):
+
+| | 512² | 768² | 1024² | → 2048² | → 4096² |
+|---|---|---|---|---|---|
+| MLX peak (resident 3.22 GB) | 5.24 GB | 5.62 GB | 5.51 GB | 10.32 GB | 28.85 GB |
+| Process phys_footprint peak (3.57 GB after load) | 7.57 GB | 7.93 GB | 7.88 GB | 11.57 GB | 30.03 GB |
+| Wall time per request | 3.2 s | 6.2 s | 13.5 s | 22.6 s | 76.1 s |
+
+**Footprint.** One lane: 3.6 GB resident, 4.4 GB activation up to 1024², on a line through 27.5 GB at 4096². It is
+declared from these CLI runs; an in-app run should confirm it before a 16 GB or 8 GB product tier leans on it. The
+entry is filed under `Quant.int4`, because the contract has no 2-bit case.
+
+**The encoder stays resident.** Loading it per request took 1.6 GB off the MLX peak, but the process footprint then
+spiked on some requests (to 6.9 and 8.9 GB at 512²), past the resident lane's. So there is no evict option here.
 
 ## Row-band decode at every size (v0.11.1, AB-R-1130, AB-R-1134)
 
